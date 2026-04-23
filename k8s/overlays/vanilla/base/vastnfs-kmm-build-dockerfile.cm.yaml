@@ -1,0 +1,383 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vastnfs-kmm-build-dockerfile
+data:
+  dockerfile: |
+    # Universal builder for VAST NFS kernel modules
+    # Supports: Ubuntu, Debian, RHEL, CentOS, Rocky, Alma, Fedora, SUSE, and immutable OS
+    #
+    # Build args:
+    #   KERNEL_FULL_VERSION - Target kernel version (required)
+    #   VASTNFS_VERSION - VAST NFS version to build (required)
+    #   BUILD_IMAGE - Base image for building (default: ubuntu:22.04)
+    #
+    ARG BUILD_IMAGE=ubuntu:22.04
+    FROM ${BUILD_IMAGE} as builder
+    
+    ARG KERNEL_FULL_VERSION
+    ARG VASTNFS_VERSION
+    
+    WORKDIR /usr/src
+    
+    # Validate kernel/build-image compatibility before installing packages
+    # This prevents confusing errors when using wrong build image for target kernel
+    RUN echo "=== Validating kernel and build image compatibility ===" && \
+        echo "Target kernel: ${KERNEL_FULL_VERSION}" && \
+        echo "Build image OS:" && cat /etc/os-release | grep -E "^(ID|VERSION_ID)=" && \
+        BUILD_OS=$(cat /etc/os-release | grep "^ID=" | cut -d= -f2 | tr -d '"') && \
+        KERNEL_TYPE="unknown" && \
+        # Detect kernel type from version string
+        case "${KERNEL_FULL_VERSION}" in \
+            *-generic|*-lowlatency|*-aws|*-azure|*-gcp|*-oracle) KERNEL_TYPE="debian" ;; \
+            *.el7*|*.el8*|*.el9*) KERNEL_TYPE="rhel" ;; \
+            *.fc*) KERNEL_TYPE="fedora" ;; \
+            *-default|*.suse*) KERNEL_TYPE="suse" ;; \
+        esac && \
+        echo "Detected kernel type: ${KERNEL_TYPE}" && \
+        # Validate compatibility
+        COMPATIBLE="yes" && \
+        case "${BUILD_OS}" in \
+            ubuntu|debian) \
+                if [ "${KERNEL_TYPE}" != "debian" ] && [ "${KERNEL_TYPE}" != "unknown" ]; then \
+                    COMPATIBLE="no"; \
+                    echo ""; \
+                    echo "========================================================"; \
+                    echo "ERROR: Kernel/Build-Image Mismatch Detected!"; \
+                    echo "========================================================"; \
+                    echo ""; \
+                    echo "  Target kernel:  ${KERNEL_FULL_VERSION}"; \
+                    echo "  Kernel type:    ${KERNEL_TYPE}"; \
+                    echo "  Build image:    ${BUILD_OS}"; \
+                    echo ""; \
+                    echo "You are trying to build for a ${KERNEL_TYPE} kernel"; \
+                    echo "using an ${BUILD_OS} build image."; \
+                    echo ""; \
+                    echo "SOLUTION: Use a matching build image:"; \
+                    echo "  - For RHEL/Rocky/Alma kernels (.el9): BUILD_IMAGE=rockylinux:9"; \
+                    echo "  - For Ubuntu kernels (-generic):      BUILD_IMAGE=ubuntu:22.04"; \
+                    echo "  - For Fedora kernels (.fc):           BUILD_IMAGE=fedora:latest"; \
+                    echo "  - For SUSE kernels (-default):        BUILD_IMAGE=opensuse/leap"; \
+                    echo ""; \
+                    echo "This should not happen with automatic kernel mapping."; \
+                    echo "Check the Module's kernelMappings configuration."; \
+                    echo ""; \
+                    exit 1; \
+                fi ;; \
+            rocky|rhel|centos|almalinux|ol) \
+                if [ "${KERNEL_TYPE}" != "rhel" ] && [ "${KERNEL_TYPE}" != "unknown" ]; then \
+                    COMPATIBLE="no"; \
+                    echo ""; \
+                    echo "========================================================"; \
+                    echo "ERROR: Kernel/Build-Image Mismatch Detected!"; \
+                    echo "========================================================"; \
+                    echo ""; \
+                    echo "  Target kernel:  ${KERNEL_FULL_VERSION}"; \
+                    echo "  Kernel type:    ${KERNEL_TYPE}"; \
+                    echo "  Build image:    ${BUILD_OS}"; \
+                    echo ""; \
+                    echo "You are trying to build for a ${KERNEL_TYPE} kernel"; \
+                    echo "using a ${BUILD_OS} build image."; \
+                    echo ""; \
+                    echo "SOLUTION: Use a matching build image:"; \
+                    echo "  - For Ubuntu kernels (-generic):      BUILD_IMAGE=ubuntu:22.04"; \
+                    echo "  - For RHEL/Rocky/Alma kernels (.el9): BUILD_IMAGE=rockylinux:9"; \
+                    echo "  - For Fedora kernels (.fc):           BUILD_IMAGE=fedora:latest"; \
+                    echo "  - For SUSE kernels (-default):        BUILD_IMAGE=opensuse/leap"; \
+                    echo ""; \
+                    echo "This should not happen with automatic kernel mapping."; \
+                    echo "Check the Module's kernelMappings configuration."; \
+                    echo ""; \
+                    exit 1; \
+                fi ;; \
+            fedora) \
+                if [ "${KERNEL_TYPE}" != "fedora" ] && [ "${KERNEL_TYPE}" != "rhel" ] && [ "${KERNEL_TYPE}" != "unknown" ]; then \
+                    COMPATIBLE="no"; \
+                    echo ""; \
+                    echo "========================================================"; \
+                    echo "ERROR: Kernel/Build-Image Mismatch Detected!"; \
+                    echo "========================================================"; \
+                    echo ""; \
+                    echo "  Target kernel:  ${KERNEL_FULL_VERSION}"; \
+                    echo "  Build image:    ${BUILD_OS}"; \
+                    echo ""; \
+                    echo "SOLUTION: Use a matching build image for your kernel."; \
+                    echo ""; \
+                    exit 1; \
+                fi ;; \
+            opensuse*|sles) \
+                if [ "${KERNEL_TYPE}" != "suse" ] && [ "${KERNEL_TYPE}" != "unknown" ]; then \
+                    COMPATIBLE="no"; \
+                    echo ""; \
+                    echo "========================================================"; \
+                    echo "ERROR: Kernel/Build-Image Mismatch Detected!"; \
+                    echo "========================================================"; \
+                    echo ""; \
+                    echo "  Target kernel:  ${KERNEL_FULL_VERSION}"; \
+                    echo "  Build image:    ${BUILD_OS}"; \
+                    echo ""; \
+                    echo "SOLUTION: Use a matching build image for your kernel."; \
+                    echo ""; \
+                    exit 1; \
+                fi ;; \
+        esac && \
+        if [ "${COMPATIBLE}" = "yes" ]; then \
+            echo "Kernel and build image are compatible. Proceeding..."; \
+        fi
+    
+    # Universal package installation script that detects the distro
+    # Note: Using POSIX-compliant syntax (>/dev/null 2>&1 instead of &>)
+    RUN echo "=== Detecting distribution and installing build dependencies ===" && \
+        echo "Target kernel: ${KERNEL_FULL_VERSION}" && \
+        if [ -f /etc/os-release ]; then cat /etc/os-release; fi && \
+        \
+        # Detect package manager and install dependencies
+        if command -v apt-get >/dev/null 2>&1; then \
+            echo "=== Using APT (Ubuntu/Debian) ===" && \
+            export DEBIAN_FRONTEND=noninteractive && \
+            apt-get update && \
+            # First install essential build tools (these must succeed)
+            apt-get --fix-broken install -y \
+                build-essential \
+                xz-utils tar kmod python3 curl \
+                debhelper autotools-dev dkms && \
+            # Then try to install kernel headers (with fallback)
+            (apt-get install -y linux-headers-${KERNEL_FULL_VERSION} || \
+             apt-get install -y linux-headers-generic || \
+             echo "WARNING: Could not install kernel headers, build may fail") && \
+            # Try to install gcc-12 for newer kernels, fall back to default gcc
+            (apt-get install -y gcc-12 g++-12 && \
+             update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100 && \
+             update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100 && \
+             echo "=== Using GCC 12 ===") || \
+            echo "=== Using default GCC ===" && \
+            # Ensure 'python' command exists
+            (apt-get install -y python-is-python3 2>/dev/null || \
+             ln -sf /usr/bin/python3 /usr/bin/python) && \
+            echo "Installed tools:" && \
+            echo "  xz: $(command -v xz)" && \
+            echo "  tar: $(command -v tar)" && \
+            echo "  which: $(command -v which)" && \
+            echo "  python: $(command -v python)" && \
+            python --version && \
+            gcc --version && \
+            rm -rf /var/lib/apt/lists/*; \
+        elif command -v dnf >/dev/null 2>&1; then \
+            echo "=== Using DNF (RHEL/Fedora/Rocky/Alma) ===" && \
+            # First install essential build tools (these must succeed)
+            dnf install -y \
+                gcc make elfutils-libelf-devel \
+                xz tar kmod python3 which \
+                rpm-build curl --allowerasing && \
+            # Then try to install kernel headers (with fallback)
+            (dnf install -y kernel-devel-${KERNEL_FULL_VERSION} kernel-headers-${KERNEL_FULL_VERSION} || \
+             dnf install -y kernel-devel kernel-headers || \
+             echo "WARNING: Could not install kernel headers, build may fail") && \
+            # Ensure 'python' command exists
+            rm -f /usr/bin/python 2>/dev/null; \
+            ln -sf /usr/bin/python3 /usr/bin/python && \
+            echo "Installed tools:" && \
+            echo "  xz: $(command -v xz)" && \
+            echo "  tar: $(command -v tar)" && \
+            echo "  which: $(command -v which)" && \
+            echo "  python: $(command -v python)" && \
+            python --version; \
+        elif command -v yum >/dev/null 2>&1; then \
+            echo "=== Using YUM (CentOS/RHEL legacy) ===" && \
+            # First install essential build tools (these must succeed)
+            yum install -y \
+                gcc make elfutils-libelf-devel \
+                curl xz tar kmod python3 which \
+                rpm-build && \
+            # Then try to install kernel headers (with fallback)
+            (yum install -y kernel-devel-${KERNEL_FULL_VERSION} kernel-headers-${KERNEL_FULL_VERSION} || \
+             yum install -y kernel-devel kernel-headers || \
+             echo "WARNING: Could not install kernel headers, build may fail") && \
+            # Ensure 'python' command exists
+            rm -f /usr/bin/python 2>/dev/null; \
+            ln -sf /usr/bin/python3 /usr/bin/python && \
+            echo "Installed tools:" && \
+            echo "  xz: $(command -v xz)" && \
+            echo "  tar: $(command -v tar)" && \
+            echo "  which: $(command -v which)" && \
+            echo "  python: $(command -v python)" && \
+            python --version; \
+        elif command -v zypper >/dev/null 2>&1; then \
+            echo "=== Using Zypper (SUSE/openSUSE) ===" && \
+            # First install essential build tools (these must succeed)
+            zypper --non-interactive install \
+                gcc make \
+                curl xz tar kmod python3 which && \
+            # Then try to install kernel headers (with fallback)
+            (zypper --non-interactive install kernel-devel=${KERNEL_FULL_VERSION} || \
+             zypper --non-interactive install kernel-devel || \
+             echo "WARNING: Could not install kernel headers, build may fail") && \
+            # Ensure 'python' command exists
+            rm -f /usr/bin/python 2>/dev/null; \
+            ln -sf /usr/bin/python3 /usr/bin/python && \
+            echo "Installed tools:" && \
+            echo "  xz: $(command -v xz)" && \
+            echo "  tar: $(command -v tar)" && \
+            echo "  which: $(command -v which)" && \
+            echo "  python: $(command -v python)" && \
+            python --version; \
+        else \
+            echo "ERROR: Unknown package manager" && exit 1; \
+        fi
+    
+    # Verify kernel headers - try multiple common locations
+    RUN echo "=== Locating kernel headers ===" && \
+        HEADER_PATHS="/lib/modules/${KERNEL_FULL_VERSION}/build \
+                      /usr/src/linux-headers-${KERNEL_FULL_VERSION} \
+                      /usr/src/kernels/${KERNEL_FULL_VERSION} \
+                      /usr/src/linux-${KERNEL_FULL_VERSION}" && \
+        for path in $HEADER_PATHS; do \
+            if [ -d "$path" ]; then \
+                echo "Found kernel headers at: $path"; \
+                ls -la "$path" | head -5; \
+                break; \
+            fi; \
+        done && \
+        echo "=== Kernel modules directory ===" && \
+        ls -la /lib/modules/ 2>/dev/null | head -10 || echo "No /lib/modules"
+    
+    # Ensure 'which' command exists (VAST download.sh uses 'which' to find python)
+    # Also ensure 'python' symlink exists
+    RUN echo "=== Ensuring prerequisites for VAST download script ===" && \
+        # Install 'which' if not present (required by VAST download.sh)
+        if ! command -v which >/dev/null 2>&1; then \
+            echo "Installing 'which' command..." && \
+            if command -v dnf >/dev/null 2>&1; then dnf install -y which; \
+            elif command -v yum >/dev/null 2>&1; then yum install -y which; \
+            elif command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y debianutils; \
+            elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install which; \
+            fi; \
+        fi && \
+        echo "which location: $(command -v which)" && \
+        # Ensure python symlink exists
+        rm -f /usr/bin/python 2>/dev/null || true && \
+        ln -sf /usr/bin/python3 /usr/bin/python && \
+        ls -la /usr/bin/python && \
+        # Verify both which and python work
+        echo "Verifying: which python3 = $(which python3)" && \
+        echo "Verifying: which python = $(which python)" && \
+        python --version && \
+        echo "Prerequisites ready for VAST download script"
+    
+    # Download VAST NFS client source
+    RUN curl -sSf https://vast-nfs.s3.amazonaws.com/download.sh | bash -s -- --source --version ${VASTNFS_VERSION}
+    
+    # Extract and build VAST NFS
+    RUN echo "=== Extracting VAST NFS source ===" && \
+        tar -xf vastnfs-*.tar.xz && \
+        cd vastnfs-${VASTNFS_VERSION} && \
+        echo "=== Building VAST NFS ${VASTNFS_VERSION} ===" && \
+        echo "Target kernel: ${KERNEL_FULL_VERSION}" && \
+        export KVER=${KERNEL_FULL_VERSION} && \
+        ./build.sh bin --no-ofed && \
+        echo "=== Build complete ===" && \
+        ls -la dist/
+    
+    # Extract modules from package (handles both .deb and .rpm)
+    RUN cd vastnfs-${VASTNFS_VERSION} && \
+        mkdir -p /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs && \
+        echo "=== Extracting modules from package ===" && \
+        if ls dist/*.deb 1>/dev/null 2>&1; then \
+            echo "Found .deb package" && \
+            dpkg -x dist/*.deb /tmp/vastnfs-install || \
+            (apt-get update && apt-get install -y dpkg && dpkg -x dist/*.deb /tmp/vastnfs-install); \
+        elif ls dist/*.rpm 1>/dev/null 2>&1; then \
+            echo "Found .rpm package" && \
+            rpm2cpio dist/*.rpm | cpio -idmv -D /tmp/vastnfs-install || \
+            (cd /tmp/vastnfs-install && rpm2cpio ../vastnfs-${VASTNFS_VERSION}/dist/*.rpm | cpio -idmv); \
+        else \
+            echo "No .deb or .rpm found, looking for direct .ko files" && \
+            find dist/ -name "*.ko" -exec cp {} /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs/ \; ; \
+        fi && \
+        echo "=== Contents of extracted package ===" && \
+        find /tmp/vastnfs-install -name "*.ko" 2>/dev/null | head -20 || true
+    
+    # Copy modules to standard location
+    RUN echo "=== Copying modules to /lib/modules ===" && \
+        mkdir -p /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs && \
+        # Find and copy all .ko files from the extracted package
+        find /tmp/vastnfs-install -name "*.ko" -exec cp {} /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs/ \; && \
+        echo "=== Installed modules ===" && \
+        ls -la /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs/ && \
+        find /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs -name "*.ko" | wc -l && \
+        echo "modules copied"
+    
+    # Copy vastnfs-ctl helper script if available
+    RUN echo "=== Looking for vastnfs-ctl ===" && \
+        mkdir -p /usr/local/bin && \
+        (find /tmp/vastnfs-install -name "vastnfs-ctl" -exec cp {} /usr/local/bin/ \; 2>/dev/null && \
+         chmod +x /usr/local/bin/vastnfs-ctl && \
+         echo "Found and copied vastnfs-ctl") || \
+        echo "vastnfs-ctl not found in package (optional)"
+    
+    # Final image - use Alpine for minimal size (works with any distro)
+    FROM alpine:latest
+    
+    ARG KERNEL_FULL_VERSION
+    ARG VASTNFS_VERSION
+    
+    # Install kmod for modprobe/depmod and bash for vastnfs-ctl
+    RUN apk add --no-cache kmod bash
+    
+    # Create KMM directory structure
+    RUN mkdir -p /opt/lib/modules/${KERNEL_FULL_VERSION}/extra
+    
+    # Copy kernel modules from builder
+    COPY --from=builder /lib/modules/${KERNEL_FULL_VERSION}/extra/vastnfs/ /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/
+    
+    # Copy vastnfs-ctl if it exists
+    COPY --from=builder /usr/local/bin/vastnfs-ctl* /opt/bin/
+    
+    # Generate module dependencies
+    RUN depmod -b /opt ${KERNEL_FULL_VERSION} || true
+    
+    # Create a smart modprobe wrapper that checks if VAST NFS is already loaded
+    # This prevents KMM from trying to reload modules that are already loaded and in use
+    RUN mkdir -p /opt/bin && \
+        echo '#!/bin/bash' > /opt/bin/vastnfs-precheck && \
+        echo '# VAST NFS Pre-Check Script' >> /opt/bin/vastnfs-precheck && \
+        echo '# Checks if VAST NFS is already loaded with the expected version' >> /opt/bin/vastnfs-precheck && \
+        echo '# Exit codes: 0 = already loaded (skip), 1 = not loaded (proceed)' >> /opt/bin/vastnfs-precheck && \
+        echo '' >> /opt/bin/vastnfs-precheck && \
+        echo 'EXPECTED_VERSION="${VASTNFS_VERSION:-'${VASTNFS_VERSION}'}"' >> /opt/bin/vastnfs-precheck && \
+        echo '' >> /opt/bin/vastnfs-precheck && \
+        echo '# Check if VAST NFS sunrpc is loaded by looking for the version parameter' >> /opt/bin/vastnfs-precheck && \
+        echo 'if [ -f /host/sys/module/sunrpc/parameters/nfs_bundle_version ]; then' >> /opt/bin/vastnfs-precheck && \
+        echo '    LOADED_VERSION=$(cat /host/sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null)' >> /opt/bin/vastnfs-precheck && \
+        echo '    echo "[vastnfs-precheck] VAST NFS is already loaded: $LOADED_VERSION"' >> /opt/bin/vastnfs-precheck && \
+        echo '    if echo "$LOADED_VERSION" | grep -q "vastdata"; then' >> /opt/bin/vastnfs-precheck && \
+        echo '        echo "[vastnfs-precheck] VAST NFS modules are active - no action needed"' >> /opt/bin/vastnfs-precheck && \
+        echo '        exit 0' >> /opt/bin/vastnfs-precheck && \
+        echo '    fi' >> /opt/bin/vastnfs-precheck && \
+        echo 'elif [ -f /sys/module/sunrpc/parameters/nfs_bundle_version ]; then' >> /opt/bin/vastnfs-precheck && \
+        echo '    LOADED_VERSION=$(cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null)' >> /opt/bin/vastnfs-precheck && \
+        echo '    echo "[vastnfs-precheck] VAST NFS is already loaded: $LOADED_VERSION"' >> /opt/bin/vastnfs-precheck && \
+        echo '    if echo "$LOADED_VERSION" | grep -q "vastdata"; then' >> /opt/bin/vastnfs-precheck && \
+        echo '        echo "[vastnfs-precheck] VAST NFS modules are active - no action needed"' >> /opt/bin/vastnfs-precheck && \
+        echo '        exit 0' >> /opt/bin/vastnfs-precheck && \
+        echo '    fi' >> /opt/bin/vastnfs-precheck && \
+        echo 'fi' >> /opt/bin/vastnfs-precheck && \
+        echo '' >> /opt/bin/vastnfs-precheck && \
+        echo 'echo "[vastnfs-precheck] VAST NFS not loaded - proceeding with installation"' >> /opt/bin/vastnfs-precheck && \
+        echo 'exit 1' >> /opt/bin/vastnfs-precheck && \
+        chmod +x /opt/bin/vastnfs-precheck
+    
+    # Store the VAST NFS version in the image for reference
+    RUN echo "${VASTNFS_VERSION}" > /opt/vastnfs-version
+    
+    # Verify final structure
+    RUN echo "=== Final KMM image structure ===" && \
+        find /opt/lib/modules -name "*.ko" && \
+        echo "=== Module count ===" && \
+        find /opt/lib/modules -name "*.ko" | wc -l && \
+        echo "=== vastnfs-ctl ===" && \
+        (ls -la /opt/bin/vastnfs-ctl 2>/dev/null || echo "vastnfs-ctl not included") && \
+        echo "=== VAST NFS Version ===" && \
+        cat /opt/vastnfs-version && \
+        echo "=== Pre-check script ===" && \
+        cat /opt/bin/vastnfs-precheck

@@ -1,15 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Backward-compatibility alias for the OpenShift with-pull-secret overlay.
+# The canonical location is `k8s/overlays/openshift/with-pull-secret`.
 resources:
-  - ../../base
-
-patches:
-  - target:
-      kind: Module
-      name: vastnfs
-    patch: |-
-      - op: add
-        path: /spec/imageRepoSecret
-        value:
-          name: ${KMM_PULL_SECRET}
+  - ../openshift/with-pull-secret

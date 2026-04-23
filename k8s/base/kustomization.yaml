@@ -1,34 +1,14 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Backward-compatibility alias.
+#
+# Historically `k8s/base` was the OpenShift base. After the multi-platform
+# consolidation, the canonical location is `k8s/overlays/openshift/base`.
+# This file exists only so that existing CI/scripts that pass
+# `KUSTOMIZE_DIR=k8s/base` keep working with no changes.
+#
+# Prefer `KUSTOMIZE_DIR=k8s/overlays/openshift/base` (or let the new
+# Makefile pick it for you via `PLATFORM=openshift`) in new work.
 resources:
-  - vastnfs-kmm-sa.yaml
-  - vastnfs-kmm-build-dockerfile.cm.yaml
-  - vastnfs.module.yaml
-
-patches:
-  - target:
-      kind: Module
-      name: vastnfs
-    patch: |-
-      - op: add
-        path: /spec/moduleLoader/container/kernelMappings/0/build/buildArgs
-        value:
-          - name: VASTNFS_VERSION
-            value: ${VASTNFS_VERSION}
-  - target:
-      kind: Module
-      name: vastnfs
-    patch: |-
-      - op: replace
-        path: /spec/moduleLoader/container/kernelMappings/0/containerImage
-        value: ${KMM_IMG}
-
-# Namespace for all resources
-namespace: ${NAMESPACE}
-
-# Labels applied to all resources
-labels:
-  - pairs:
-      app.kubernetes.io/name: vastnfs-kmm
-      app.kubernetes.io/component: kernel-module
+  - ../overlays/openshift/base

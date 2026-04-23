@@ -1,0 +1,103 @@
+apiVersion: kmm.sigs.x-k8s.io/v1beta1
+kind: Module
+metadata:
+  name: vastnfs
+spec:
+  selector: {}  # Empty selector - deploys to all nodes
+  moduleLoader:
+    serviceAccountName: vastnfs-kmm-sa
+    container:
+      modprobe:
+        dirName: /opt
+        moduleName: sunrpc
+        modulesLoadingOrder:
+          - sunrpc
+          - rpcrdma
+          - compat_nfs_ssc
+          - lockd
+          - nfs_acl
+          - auth_rpcgss
+          - nfs
+          - nfsv3
+          - nfsv4
+        args:
+          unload: ["-v", "-r"]  # Verbose and recursive unloading
+      inTreeModulesToRemove:
+        - rpcsec_gss_krb5
+        - auth_rpcgss
+        - nfsd
+        - nfsv4
+        - auth_rpcgss
+        - lockd
+        - rpcsec_gss_krb5
+        - nfs_acl
+        - nfs
+        - rpcrdma
+        - sunrpc
+      kernelMappings:
+        # Ubuntu/Debian kernels (-generic, -lowlatency, -aws, -azure, -gcp, -oracle)
+        - regexp: '^.*-(generic|lowlatency|aws|azure|gcp|oracle)$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: ubuntu:22.04
+        # RHEL 9 / Rocky 9 / Alma 9 / Oracle Linux 9 kernels
+        - regexp: '^.*\.el9.*$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: rockylinux:9
+        # RHEL 8 / Rocky 8 / CentOS 8 / Oracle Linux 8 kernels
+        - regexp: '^.*\.el8.*$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: rockylinux:8
+        # Fedora kernels
+        - regexp: '^.*\.fc[0-9]+\..*$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: fedora:latest
+        # SUSE/openSUSE kernels (-default)
+        - regexp: '^.*-default$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: opensuse/leap
+        # Fallback for any other kernel (tries Ubuntu build image)
+        - regexp: '^.+$'
+          containerImage: placeholder
+          registryTLS:
+            insecure: true
+          build:
+            dockerfileConfigMap:
+              name: vastnfs-kmm-build-dockerfile
+            buildArgs:
+              - name: BUILD_IMAGE
+                value: ubuntu:22.04

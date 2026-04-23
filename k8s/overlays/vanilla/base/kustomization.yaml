@@ -1,0 +1,79 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - vastnfs-kmm-sa.yaml
+  - vastnfs-kmm-build-dockerfile.cm.yaml
+  - vastnfs.module.yaml
+
+patches:
+  # Add VASTNFS_VERSION build arg to all kernel mappings
+  # Each mapping already has BUILD_IMAGE set appropriately for its kernel type
+  - target:
+      kind: Module
+      name: vastnfs
+    patch: |-
+      # Ubuntu/Debian kernels (index 0)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/0/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/0/containerImage
+        value: ${KMM_IMG}
+      # RHEL 9 kernels (index 1)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/1/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/1/containerImage
+        value: ${KMM_IMG}
+      # RHEL 8 kernels (index 2)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/2/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/2/containerImage
+        value: ${KMM_IMG}
+      # Fedora kernels (index 3)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/3/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/3/containerImage
+        value: ${KMM_IMG}
+      # SUSE kernels (index 4)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/4/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/4/containerImage
+        value: ${KMM_IMG}
+      # Fallback (index 5)
+      - op: add
+        path: /spec/moduleLoader/container/kernelMappings/5/build/buildArgs/-
+        value:
+          name: VASTNFS_VERSION
+          value: ${VASTNFS_VERSION}
+      - op: replace
+        path: /spec/moduleLoader/container/kernelMappings/5/containerImage
+        value: ${KMM_IMG}
+
+# Namespace for all resources
+namespace: ${NAMESPACE}
+
+# Labels applied to all resources
+labels:
+  - pairs:
+      app.kubernetes.io/name: vastnfs-kmm
+      app.kubernetes.io/component: kernel-module

@@ -1,0 +1,17 @@
+# /etc/systemd/system/disable-intree-nfs.service
+# This service disables in-tree NFS modules before rpcbind starts
+# Install: Copy to each node and enable: systemctl enable disable-intree-nfs.service
+
+[Unit]
+Description=Disable in-tree NFS for VAST NFS KMM
+DefaultDependencies=no
+Before=rpcbind.socket rpcbind.service nfs-client.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'systemctl mask rpcbind.socket rpcbind.service; systemctl stop rpcbind.socket rpcbind.service 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
