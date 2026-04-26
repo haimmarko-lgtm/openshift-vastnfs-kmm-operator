@@ -96,6 +96,31 @@ verify_keys() {
     verify_secret_content "${SIGNING_CERT_SECRET}" "${NAMESPACE}" "cert" "openssl x509 -inform der -text"
 }
 
+cleanup_stale_kmm_state() {
+    local namespace="$1"
+    local module_name="vastnfs"
+
+    print_step "Cleaning stale KMM generated state..."
+
+    "${KUBE_CMD}" delete pods -n "$namespace" \
+        -l "kmm.node.kubernetes.io/module.name=$module_name" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" delete builds -n "$namespace" \
+        -l "kmm.node.kubernetes.io/module.name=$module_name" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" patch modulebuildsignconfig "$module_name" -n "$namespace" \
+        -p '{"metadata":{"finalizers":null}}' --type=merge >/dev/null 2>&1 || true
+    "${KUBE_CMD}" delete modulebuildsignconfig "$module_name" -n "$namespace" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" patch moduleimagesconfig "$module_name" -n "$namespace" \
+        -p '{"metadata":{"finalizers":null}}' --type=merge >/dev/null 2>&1 || true
+    "${KUBE_CMD}" delete moduleimagesconfig "$module_name" -n "$namespace" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+}
+
 deploy_vastnfs() {
     print_step "Deploying VAST NFS with secure boot support..."
 
@@ -142,6 +167,7 @@ deploy_vastnfs() {
     fi
 
     print_info "Applying to cluster..."
+    cleanup_stale_kmm_state "$NAMESPACE"
     "${KUBE_CMD}" apply -f "$temp_manifest"
 
     cleanup_temp_files "$temp_manifest"

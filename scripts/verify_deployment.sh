@@ -103,9 +103,13 @@ get_node_role() {
     local node="$1"
     local roles
     roles=$("${KUBE_CMD}" get node "$node" -o jsonpath='{.metadata.labels}' 2>/dev/null)
-    if echo "$roles" | grep -q "node-role.kubernetes.io/control-plane"; then
-        echo "control-plane"
-    elif echo "$roles" | grep -q "node-role.kubernetes.io/master"; then
+    if echo "$roles" | grep -q "node-role.kubernetes.io/worker"; then
+        if echo "$roles" | grep -q "node-role.kubernetes.io/control-plane\|node-role.kubernetes.io/master"; then
+            echo "ctrl+worker"
+        else
+            echo "worker"
+        fi
+    elif echo "$roles" | grep -q "node-role.kubernetes.io/control-plane\|node-role.kubernetes.io/master"; then
         echo "control-plane"
     else
         echo "worker"
@@ -365,10 +369,11 @@ get_secure_boot_status() {
 
 get_failure_reason() {
     local node="$1"
-    local worker_pod="kmm-worker-${node}-${MODULE_NAME}"
+    local worker_pod
+    worker_pod=$(get_worker_pod_for_node "$node")
 
-    if ! "${KUBE_CMD}" get pod "$worker_pod" -n "$NAMESPACE" &>/dev/null; then
-        echo "No worker pod"
+    if [[ -z "$worker_pod" ]]; then
+        get_module_failure_reason
         return
     fi
 
@@ -393,6 +398,74 @@ get_failure_reason() {
         else
             echo "-"
         fi
+    fi
+}
+
+get_module_failure_reason() {
+    local event_reason
+    event_reason=$(get_recent_module_event_reason)
+
+    if [[ -n "$event_reason" ]]; then
+        echo "$event_reason"
+    else
+        echo "No loader pod"
+    fi
+}
+
+get_recent_module_event_reason() {
+    local events reason kind name message candidate=""
+
+    events=$("${KUBE_CMD}" get events -n "$NAMESPACE" --sort-by='.lastTimestamp' \
+        -o jsonpath='{range .items[*]}{.reason}{"\t"}{.involvedObject.kind}{"\t"}{.involvedObject.name}{"\t"}{.message}{"\n"}{end}' 2>/dev/null || echo "")
+
+    while IFS=$'\t' read -r reason kind name message; do
+        if [[ "$name" != "$MODULE_NAME" && "$name" != "$MODULE_NAME-"* ]]; then
+            continue
+        fi
+
+        case "$reason" in
+            BuildimageFailed|BuildFailed)
+                candidate="Build failed"
+                ;;
+            BuildStarted)
+                candidate="Build running"
+                ;;
+            BuildimageCreated)
+                candidate="Build queued"
+                ;;
+            Failed)
+                if [[ "$message" == *"ErrImagePull"* ]] || [[ "$message" == *"Failed to pull image"* ]]; then
+                    candidate="Image pull failed"
+                fi
+                ;;
+            BackOff)
+                if [[ "$message" == *"pulling image"* ]]; then
+                    candidate="Image pull backoff"
+                fi
+                ;;
+        esac
+    done <<< "$events"
+
+    echo "$candidate"
+}
+
+get_worker_pod_for_node() {
+    local node="$1"
+    local worker_pod
+
+    worker_pod=$("${KUBE_CMD}" get pods -n "$NAMESPACE" \
+        -l "kmm.node.kubernetes.io/module.name=$MODULE_NAME" \
+        --field-selector "spec.nodeName=$node" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [[ -n "$worker_pod" ]]; then
+        echo "$worker_pod"
+        return
+    fi
+
+    worker_pod="kmm-worker-${node}-${MODULE_NAME}"
+    if "${KUBE_CMD}" get pod "$worker_pod" -n "$NAMESPACE" &>/dev/null; then
+        echo "$worker_pod"
     fi
 }
 
@@ -581,14 +654,11 @@ show_worker_pod_logs() {
     local node="$1"
 
     local worker_pod
-    worker_pod=$("${KUBE_CMD}" get pods -n "$NAMESPACE" -l "kmm.node.kubernetes.io/module.name=$MODULE_NAME" --field-selector "spec.nodeName=$node" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    worker_pod=$(get_worker_pod_for_node "$node")
 
     if [[ -z "$worker_pod" ]]; then
-        worker_pod="kmm-worker-${node}-${MODULE_NAME}"
-        if ! "${KUBE_CMD}" get pod "$worker_pod" -n "$NAMESPACE" &>/dev/null; then
-            print_info "  No worker pod found for node $node"
-            return
-        fi
+        print_info "  No worker pod found for node $node"
+        return
     fi
 
     print_info "  Worker pod logs from $worker_pod:"

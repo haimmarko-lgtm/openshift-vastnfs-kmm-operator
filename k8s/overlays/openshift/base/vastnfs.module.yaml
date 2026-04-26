@@ -7,6 +7,9 @@ spec:
   moduleLoader:
     serviceAccountName: vastnfs-kmm-sa
     container:
+      # Force KMM's image-existence probe to query the registry instead of
+      # accepting a stale node-local cache after registry rebuilds.
+      imagePullPolicy: Always
       modprobe:
         dirName: /opt
         moduleName: sunrpc

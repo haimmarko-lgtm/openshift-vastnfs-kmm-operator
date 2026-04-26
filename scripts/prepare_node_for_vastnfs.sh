@@ -21,6 +21,56 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/common.sh
+source "$SCRIPT_DIR/common.sh"
+
+# Keep the existing command style while honoring PLATFORM/KUBE_CMD.
+kubectl() {
+    if [[ "${KUBE_CMD}" == "oc" ]]; then
+        case "$1" in
+            cordon|drain|uncordon)
+                local adm_cmd="$1"
+                shift
+                oc adm "$adm_cmd" "$@"
+                return
+                ;;
+        esac
+    fi
+    "${KUBE_CMD}" "$@"
+}
+
+resolve_image_reference() {
+    local image="$1"
+
+    if [[ "${PLATFORM}" != "openshift" ]] || [[ "${KUBE_CMD}" != "oc" ]]; then
+        echo "$image"
+        return
+    fi
+
+    # OpenShift nodes can occasionally fail tag lookup against the internal
+    # registry while digest pulls work. Resolve ImageStreamTags to immutable
+    # digest references before creating helper pods.
+    local image_without_tag tag stream resolved
+    image_without_tag="${image%:*}"
+    tag="${image##*:}"
+    stream="${image_without_tag##*/}"
+
+    if [[ -z "$tag" ]] || [[ "$tag" == "$image" ]] || [[ -z "$stream" ]]; then
+        echo "$image"
+        return
+    fi
+
+    resolved=$(oc get istag "${stream}:${tag}" -n "$NAMESPACE" \
+        -o jsonpath='{.image.dockerImageReference}' 2>/dev/null || true)
+
+    if [[ -n "$resolved" ]]; then
+        echo "$resolved"
+    else
+        echo "$image"
+    fi
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -76,6 +126,13 @@ NODE_NAME="$1"
 MAX_ATTEMPTS=60
 HELPER_IMAGE="${VASTNFS_HELPER_IMAGE:-alpine:latest}"
 NAMESPACE="${NAMESPACE:-vastnfs-kmm}"
+if [[ -z "${PREPARE_SERVICE_ACCOUNT:-}" ]]; then
+    if [[ "${PLATFORM}" == "openshift" ]]; then
+        PREPARE_SERVICE_ACCOUNT="vastnfs-kmm-sa"
+    else
+        PREPARE_SERVICE_ACCOUNT="default"
+    fi
+fi
 ALLOW_KUBELET_STOP=1
 UNLOAD_ONLY=0
 shift
@@ -111,8 +168,34 @@ if ! kubectl get node "$NODE_NAME" &>/dev/null; then
     exit 1
 fi
 
+if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+    print_error "Namespace '$NAMESPACE' does not exist"
+    print_info "Run 'make install VASTNFS_VERSION=${VASTNFS_VERSION:-<version>}' first to recreate KMM resources and push the module image."
+    exit 1
+fi
+
+if [[ "$PREPARE_SERVICE_ACCOUNT" != "default" ]] && ! kubectl get serviceaccount "$PREPARE_SERVICE_ACCOUNT" -n "$NAMESPACE" >/dev/null 2>&1; then
+    print_error "ServiceAccount '$PREPARE_SERVICE_ACCOUNT' does not exist in namespace '$NAMESPACE'"
+    print_info "Run 'make install VASTNFS_VERSION=${VASTNFS_VERSION:-<version>}' first to recreate the OpenShift privileged service account."
+    exit 1
+fi
+
+if [ "$UNLOAD_ONLY" != "1" ] && [ -n "${VASTNFS_VERSION:-}" ] && [ -n "${KMM_IMG_REPO:-}" ]; then
+    PRECHECK_KERNEL_VERSION=$(kubectl get node "$NODE_NAME" -o jsonpath='{.status.nodeInfo.kernelVersion}' 2>/dev/null || echo "")
+    PRECHECK_IMAGE="${KMM_IMG_REPO}:${PRECHECK_KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}"
+    PRECHECK_RESOLVED_IMAGE=$(resolve_image_reference "$PRECHECK_IMAGE")
+
+    if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]] && [[ "$PRECHECK_RESOLVED_IMAGE" == "$PRECHECK_IMAGE" ]]; then
+        print_error "VAST NFS image tag is not available in the OpenShift ImageStream:"
+        print_error "  $PRECHECK_IMAGE"
+        print_info "Run 'make install VASTNFS_VERSION=$VASTNFS_VERSION' and wait for the build/push to complete before preparing nodes."
+        exit 1
+    fi
+fi
+
 print_step "=========================================="
 print_step "Preparing node: $NODE_NAME"
+print_step "Kube CLI: $KUBE_CMD"
 print_step "Max unload attempts: $MAX_ATTEMPTS"
 print_step "Helper image: $HELPER_IMAGE"
 if [ "$ALLOW_KUBELET_STOP" = "1" ]; then
@@ -370,6 +453,7 @@ spec:
   hostPID: true
   hostNetwork: true
   restartPolicy: Never
+  serviceAccountName: $PREPARE_SERVICE_ACCOUNT
   tolerations:
   - operator: Exists
   volumes:
@@ -419,6 +503,11 @@ EOF
         if [ "$POD_PHASE" = "Succeeded" ] || [ "$POD_PHASE" = "Failed" ]; then
             break
         fi
+        WAITING_REASON=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.initContainerStatuses[*].state.waiting.reason} {.status.containerStatuses[*].state.waiting.reason}' 2>/dev/null || echo "")
+        if echo "$WAITING_REASON" | grep -qE "ErrImagePull|ImagePullBackOff"; then
+            print_error "Helper pod image pull failed: $WAITING_REASON"
+            break
+        fi
         sleep 2
     done
     
@@ -461,6 +550,7 @@ KVER_OUTPUT=$(kubectl run "get-kver-$(echo "$NODE_NAME" | tr '.' '-' | cut -c1-1
         "spec": {
             "nodeName": "'"$NODE_NAME"'",
             "hostPID": true,
+            "serviceAccountName": "'"$PREPARE_SERVICE_ACCOUNT"'",
             "containers": [{
                 "name": "kver",
                 "image": "'"$HELPER_IMAGE"'",
@@ -494,6 +584,11 @@ fi
 
 VASTNFS_IMAGE="${KMM_IMG_REPO}:${KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}"
 print_info "VAST NFS image: $VASTNFS_IMAGE"
+RESOLVED_VASTNFS_IMAGE=$(resolve_image_reference "$VASTNFS_IMAGE")
+if [[ "$RESOLVED_VASTNFS_IMAGE" != "$VASTNFS_IMAGE" ]]; then
+    print_info "Resolved image digest: $RESOLVED_VASTNFS_IMAGE"
+    VASTNFS_IMAGE="$RESOLVED_VASTNFS_IMAGE"
+fi
 
 # Step 4: Copy modules and vastnfs-ctl, then reload using vastnfs-ctl
 print_step "Step 4: Copying VAST NFS modules and reloading NFS stack..."
@@ -515,6 +610,8 @@ ALLOW_KUBELET_STOP='"$ALLOW_KUBELET_STOP"'
 SLEEP_BETWEEN=3
 KUBELET_STOPPED=0
 KVER="'"$KERNEL_VERSION"'"
+MODULE_ROOT=/tmp/vastnfs-opt
+MODULE_DIR=$MODULE_ROOT/lib/modules/$KVER/extra
 
 echo "=== Host OS Information ==="
 cat /etc/os-release 2>/dev/null | head -5 || echo "Unknown OS"
@@ -531,26 +628,28 @@ if cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q "v
 fi
 
 echo "=== Step 1: Verifying VAST NFS modules are in place ==="
-if [ ! -d "/lib/modules/$KVER/updates/vastnfs" ] || [ -z "$(ls -A /lib/modules/$KVER/updates/vastnfs/*.ko 2>/dev/null)" ]; then
-    echo "ERROR: VAST NFS modules not found at /lib/modules/$KVER/updates/vastnfs/"
+if [ ! -d "$MODULE_DIR" ] || ! find "$MODULE_DIR" -name '*.ko' -type f | grep -q .; then
+    echo "ERROR: VAST NFS modules not found under $MODULE_DIR"
     echo "Modules should be copied by the init container."
     exit 1
 fi
 echo "Modules found:"
-ls -la /lib/modules/$KVER/updates/vastnfs/
+find "$MODULE_DIR" -name '*.ko' -type f | sort
 
 echo ""
 echo "=== Step 2: Ensuring vastnfs-ctl is available ==="
 if [ ! -x /usr/local/bin/vastnfs-ctl ]; then
-    echo "ERROR: vastnfs-ctl not found at /usr/local/bin/vastnfs-ctl"
-    echo "It should be copied by the init container."
-    exit 1
+    echo "WARNING: vastnfs-ctl not found at /usr/local/bin/vastnfs-ctl"
+    echo "Will use manual fallback method."
+    VASTNFS_CTL_AVAILABLE=0
+else
+    echo "vastnfs-ctl found at /usr/local/bin/vastnfs-ctl"
+    VASTNFS_CTL_AVAILABLE=1
 fi
-echo "vastnfs-ctl found at /usr/local/bin/vastnfs-ctl"
 
 echo ""
 echo "=== Step 3: Running depmod to update module dependencies ==="
-depmod -a $KVER
+depmod -b "$MODULE_ROOT" "$KVER"
 echo "depmod completed"
 
 echo ""
@@ -561,7 +660,7 @@ echo "This will unload existing NFS modules and reload with VAST NFS."
 echo ""
 
 # Try vastnfs-ctl reload
-if /usr/local/bin/vastnfs-ctl reload; then
+if [ "$VASTNFS_CTL_AVAILABLE" = "1" ] && /usr/local/bin/vastnfs-ctl reload; then
     echo ""
     echo "=========================================="
     echo "SUCCESS: vastnfs-ctl reload completed!"
@@ -743,22 +842,23 @@ load_vastnfs_modules() {
     
     # Show module info for debugging
     echo "Module location:"
-    ls -la /lib/modules/$KVER/updates/vastnfs/sunrpc.ko 2>/dev/null || echo "sunrpc.ko not found in updates/vastnfs"
+    SUNRPC_KO=$(find "$MODULE_DIR" -name sunrpc.ko -type f | head -1)
+    ls -la "$SUNRPC_KO" 2>/dev/null || echo "sunrpc.ko not found under $MODULE_DIR"
     echo ""
     
     # Try modprobe first
-    if modprobe -v sunrpc 2>&1; then
+    if modprobe -d "$MODULE_ROOT" -v sunrpc 2>&1; then
         echo "Loaded: sunrpc (via modprobe)"
     else
         echo "modprobe sunrpc failed, trying insmod directly..."
         echo ""
         echo "=== Diagnostic info ==="
         echo "Kernel: $(uname -r)"
-        modinfo /lib/modules/$KVER/updates/vastnfs/sunrpc.ko 2>&1 | head -10 || true
+        modinfo "$SUNRPC_KO" 2>&1 | head -10 || true
         echo ""
         
         # Try insmod directly with verbose output
-        if insmod /lib/modules/$KVER/updates/vastnfs/sunrpc.ko 2>&1; then
+        if [ -n "$SUNRPC_KO" ] && insmod "$SUNRPC_KO" 2>&1; then
             echo "Loaded: sunrpc (via insmod)"
         else
             echo "FAILED: sunrpc"
@@ -772,14 +872,14 @@ load_vastnfs_modules() {
             fi
             echo ""
             echo "=== Module file info ==="
-            file /lib/modules/$KVER/updates/vastnfs/sunrpc.ko 2>/dev/null || true
+            file "$SUNRPC_KO" 2>/dev/null || true
             return 1
         fi
     fi
     
-    modprobe -v nfs && echo "Loaded: nfs" || { echo "FAILED: nfs"; dmesg | tail -10; return 1; }
-    modprobe -v nfsv3 2>/dev/null && echo "Loaded: nfsv3" || true
-    modprobe -v nfsv4 2>/dev/null && echo "Loaded: nfsv4" || true
+    modprobe -d "$MODULE_ROOT" -v nfs && echo "Loaded: nfs" || { echo "FAILED: nfs"; dmesg | tail -10; return 1; }
+    modprobe -d "$MODULE_ROOT" -v nfsv3 2>/dev/null && echo "Loaded: nfsv3" || true
+    modprobe -d "$MODULE_ROOT" -v nfsv4 2>/dev/null && echo "Loaded: nfsv4" || true
     
     # Start required NFS userspace services
     echo ""
@@ -1026,6 +1126,7 @@ spec:
   hostPID: true
   hostNetwork: true
   restartPolicy: Never
+  serviceAccountName: $PREPARE_SERVICE_ACCOUNT
   tolerations:
   - operator: Exists
   volumes:
@@ -1058,10 +1159,13 @@ spec:
       set -e
       KVER="$KERNEL_VERSION"
       echo "=== Copying VAST NFS modules to host ==="
-      mkdir -p /host-modules/\$KVER/updates/vastnfs
-      cp /opt/lib/modules/\$KVER/extra/*.ko /host-modules/\$KVER/updates/vastnfs/
+      MODULE_ROOT=/host-tmp/vastnfs-opt
+      rm -rf "\$MODULE_ROOT"
+      mkdir -p "\$MODULE_ROOT/lib/modules/\$KVER"
+      cp -a /opt/lib/modules/\$KVER/extra "\$MODULE_ROOT/lib/modules/\$KVER/"
+      cp /opt/lib/modules/\$KVER/modules.* "\$MODULE_ROOT/lib/modules/\$KVER/" 2>/dev/null || true
       echo "Modules copied:"
-      ls -la /host-modules/\$KVER/updates/vastnfs/
+      find "\$MODULE_ROOT/lib/modules/\$KVER/extra" -name '*.ko' -type f | sort
       
       # Copy vastnfs-ctl to host /tmp (will be moved by main container via nsenter)
       if [ -f /opt/bin/vastnfs-ctl ]; then
@@ -1131,6 +1235,11 @@ for i in $(seq 1 300); do
     if [ "$POD_PHASE" = "Succeeded" ] || [ "$POD_PHASE" = "Failed" ]; then
         break
     fi
+    WAITING_REASON=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.initContainerStatuses[*].state.waiting.reason} {.status.containerStatuses[*].state.waiting.reason}' 2>/dev/null || echo "")
+    if echo "$WAITING_REASON" | grep -qE "ErrImagePull|ImagePullBackOff"; then
+        print_error "Prep pod image pull failed: $WAITING_REASON"
+        break
+    fi
     sleep 2
 done
 
@@ -1141,20 +1250,30 @@ wait $LOG_PID 2>/dev/null || true
 # Get the exit code from the pod
 UNLOAD_STATUS=0
 POD_PHASE=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-EXIT_CODE=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || echo "1")
+EXIT_CODE=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
+if [ -z "$EXIT_CODE" ]; then
+    EXIT_CODE=$(kubectl get pod $POD_NAME -n "$NAMESPACE" -o jsonpath='{.status.initContainerStatuses[0].state.terminated.exitCode}' 2>/dev/null || echo "1")
+fi
 
 if [ "$POD_PHASE" = "Succeeded" ] && [ "$EXIT_CODE" = "0" ]; then
     print_success "VAST NFS reload completed successfully"
 else
     print_error "VAST NFS reload pod failed (phase: $POD_PHASE, exit: $EXIT_CODE)"
-    # Show logs if we haven't already
-    kubectl logs $POD_NAME -n "$NAMESPACE" --tail=50 2>/dev/null || true
+    print_info "copy-modules logs:"
+    kubectl logs $POD_NAME -n "$NAMESPACE" -c copy-modules --tail=80 2>/dev/null || true
+    print_info "reload logs:"
+    kubectl logs $POD_NAME -n "$NAMESPACE" -c reload --tail=80 2>/dev/null || true
     UNLOAD_STATUS=1
 fi
 
-# Cleanup the pod and ConfigMap
-kubectl delete pod $POD_NAME -n "$NAMESPACE" --force --grace-period=0 2>/dev/null || true
-kubectl delete configmap $CM_NAME -n "$NAMESPACE" 2>/dev/null || true
+# Cleanup the pod and ConfigMap. Keep failed pods when explicitly requested for
+# interactive debugging.
+if [ $UNLOAD_STATUS -eq 0 ] || [ "${KEEP_FAILED_PREP_POD:-false}" != "true" ]; then
+    kubectl delete pod $POD_NAME -n "$NAMESPACE" --force --grace-period=0 2>/dev/null || true
+    kubectl delete configmap $CM_NAME -n "$NAMESPACE" 2>/dev/null || true
+else
+    print_warning "Keeping failed pod for debugging: $POD_NAME"
+fi
 
 if [ $UNLOAD_STATUS -ne 0 ]; then
     print_error "VAST NFS reload failed!"
@@ -1172,6 +1291,7 @@ VASTNFS_VERSION_LOADED=$(kubectl run "$VERIFY_POD" -n "$NAMESPACE" --rm -i --res
         "spec": {
             "nodeName": "'"$NODE_NAME"'",
             "hostPID": true,
+            "serviceAccountName": "'"$PREPARE_SERVICE_ACCOUNT"'",
             "containers": [{
                 "name": "verify",
                 "image": "'"$HELPER_IMAGE"'",
@@ -1210,6 +1330,7 @@ kubectl run "$POD_NAME" -n "$NAMESPACE" --rm -i --restart=Never \
         "spec": {
             "nodeName": "'"$NODE_NAME"'",
             "hostPID": true,
+            "serviceAccountName": "'"$PREPARE_SERVICE_ACCOUNT"'",
             "containers": [{
                 "name": "verify",
                 "image": "'"$HELPER_IMAGE"'",

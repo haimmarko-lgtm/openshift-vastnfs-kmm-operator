@@ -10,6 +10,23 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/common.sh
+source "$SCRIPT_DIR/common.sh"
+
+# Keep the existing command style while honoring PLATFORM/KUBE_CMD.
+kubectl() {
+    if [[ "${KUBE_CMD}" == "oc" ]]; then
+        case "$1" in
+            cordon|drain|uncordon)
+                local adm_cmd="$1"
+                shift
+                oc adm "$adm_cmd" "$@"
+                return
+                ;;
+        esac
+    fi
+    "${KUBE_CMD}" "$@"
+}
 
 # Colors
 RED='\033[0;31m'
@@ -34,6 +51,13 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 MAX_ATTEMPTS=60
 HELPER_IMAGE="${VASTNFS_HELPER_IMAGE:-alpine:latest}"
 NAMESPACE="${NAMESPACE:-vastnfs-kmm}"
+if [[ -z "${PREPARE_SERVICE_ACCOUNT:-}" ]]; then
+    if [[ "${PLATFORM}" == "openshift" ]]; then
+        PREPARE_SERVICE_ACCOUNT="vastnfs-kmm-sa"
+    else
+        PREPARE_SERVICE_ACCOUNT="default"
+    fi
+fi
 LABEL_SKIP="${LABEL_SKIP:-false}"
 EXTRA_ARGS=""
 
@@ -75,14 +99,12 @@ done
 
 print_header "VAST NFS Rolling Update - Worker Node Preparation"
 
-# Get all worker nodes (non-control-plane)
-# This method works across different K8s distributions
-WORKER_NODES=$(kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints 2>/dev/null | \
-    grep -v "node-role.kubernetes.io/control-plane\|node-role.kubernetes.io/master" | \
-    awk '{print $1}' || \
-    kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name | head -10)
+# Prefer explicit worker-labeled nodes. This includes compact OpenShift nodes
+# that are both control-plane and worker.
+WORKER_NODES=$(kubectl get nodes -l node-role.kubernetes.io/worker \
+    --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || true)
 
-# If that didn't work, try an alternative method
+# Fall back to non-control-plane nodes for clusters that do not use worker labels.
 if [ -z "$WORKER_NODES" ]; then
     WORKER_NODES=$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master' --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null || \
         kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name)
@@ -108,6 +130,7 @@ for node in $WORKER_NODES; do
 done
 echo ""
 echo "Processing mode: Rolling update (one node at a time)"
+echo "Kube CLI: $KUBE_CMD"
 echo "Max unload attempts per node: $MAX_ATTEMPTS"
 echo "Helper image: $HELPER_IMAGE"
 if [ "$LABEL_SKIP" = "true" ]; then
@@ -222,7 +245,7 @@ for node in $WORKER_NODES; do
     
     POD_NAME="status-$(echo "$node" | tr '.' '-' | cut -c1-15)-$$"
     version=$(kubectl run "$POD_NAME" -n "$NAMESPACE" --rm -i --restart=Never --image="$HELPER_IMAGE" \
-        --overrides='{"spec":{"nodeName":"'"$node"'","hostPID":true,"containers":[{"name":"c","image":"'"$HELPER_IMAGE"'","command":["nsenter","-t","1","-m","-u","-i","-n","--","cat","/sys/module/sunrpc/parameters/nfs_bundle_version"],"securityContext":{"privileged":true}}],"tolerations":[{"operator":"Exists"}]}}' 2>/dev/null | grep -v "command prompt" | grep -v "^pod " | head -1 || echo "N/A")
+        --overrides='{"spec":{"nodeName":"'"$node"'","hostPID":true,"serviceAccountName":"'"$PREPARE_SERVICE_ACCOUNT"'","containers":[{"name":"c","image":"'"$HELPER_IMAGE"'","command":["nsenter","-t","1","-m","-u","-i","-n","--","cat","/sys/module/sunrpc/parameters/nfs_bundle_version"],"securityContext":{"privileged":true}}],"tolerations":[{"operator":"Exists"}]}}' 2>/dev/null | grep -v "command prompt" | grep -v "^pod " | head -1 || echo "N/A")
     
     printf "%-25s %-15s %-25s %-20s\n" "$node" "$node_status" "$os" "$version"
 done

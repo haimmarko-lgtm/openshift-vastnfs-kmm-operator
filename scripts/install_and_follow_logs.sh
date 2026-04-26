@@ -52,6 +52,31 @@ show_help() {
 }
 
 # ---- Install ---------------------------------------------------------------
+cleanup_stale_kmm_state() {
+    local namespace="$1"
+    local module_name="vastnfs"
+
+    print_step "Cleaning stale KMM generated state..."
+
+    "${KUBE_CMD}" delete pods -n "$namespace" \
+        -l "kmm.node.kubernetes.io/module.name=$module_name" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" delete builds -n "$namespace" \
+        -l "kmm.node.kubernetes.io/module.name=$module_name" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" patch modulebuildsignconfig "$module_name" -n "$namespace" \
+        -p '{"metadata":{"finalizers":null}}' --type=merge >/dev/null 2>&1 || true
+    "${KUBE_CMD}" delete modulebuildsignconfig "$module_name" -n "$namespace" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+
+    "${KUBE_CMD}" patch moduleimagesconfig "$module_name" -n "$namespace" \
+        -p '{"metadata":{"finalizers":null}}' --type=merge >/dev/null 2>&1 || true
+    "${KUBE_CMD}" delete moduleimagesconfig "$module_name" -n "$namespace" \
+        --ignore-not-found=true >/dev/null 2>&1 || true
+}
+
 install_vastnfs() {
     local namespace="$1"
     local vastnfs_version="$2"
@@ -86,6 +111,7 @@ install_vastnfs() {
     fi
 
     print_info "Building and applying manifests..."
+    cleanup_stale_kmm_state "$namespace"
 
     local temp_manifest="/tmp/vastnfs-install-$$.yaml"
     local kustomize_cmd="${KUSTOMIZE:-kustomize}"

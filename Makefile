@@ -65,6 +65,7 @@ KMM_PULL_SECRET ?=
 ######################
 # NODE_SELECTOR: optional Module.spec.selector patch, e.g. "vastnfs-kmm/enabled=true"
 NODE_SELECTOR ?=
+SECURE_BOOT_KUSTOMIZE_DIR ?= k8s/overlays/$(PLATFORM)/secure-boot
 
 ######################
 # BUILD IMAGE AUTO-DETECT (vanilla only)
@@ -254,6 +255,9 @@ build-only: create-namespace kustomize ## Build kernel module images without dep
 ######################
 install: create-namespace kustomize ## Install VAST NFS KMM on the cluster with log monitoring
 	@$(call check_required_env,$(REQ_INSTALL_ENV))
+	@NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) NODE_SELECTOR="$(NODE_SELECTOR)" \
+		VASTNFS_VERSION="$(VASTNFS_VERSION)" ALLOW_UNSIGNED_ON_SECURE_BOOT="$(ALLOW_UNSIGNED_ON_SECURE_BOOT)" \
+		./scripts/check_secure_boot_required.sh
 	@echo "Checking if VAST NFS is already loaded (for upgrade scenario)..."
 	@if NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) ./scripts/check_vastnfs_loaded.sh 2>/dev/null; then \
 		echo "VAST NFS is already loaded - performing graceful unload before upgrade..."; \
@@ -312,12 +316,11 @@ reinstall: create-namespace kustomize ## Reinstall when modules already loaded (
 	@echo "Monitor with: $(KUBE_CMD) get pods -n $(NAMESPACE) -w"
 
 ######################
-# NODE PREPARATION (VANILLA ONLY)
+# NODE PREPARATION
 ######################
 LABEL_SKIP ?= false
 
-prepare-worker: ## [vanilla] Prepare a single worker node (NODE=<name> [LABEL_SKIP=true])
-	$(call require_platform,vanilla)
+prepare-worker: ## Prepare a single worker node (NODE=<name> [LABEL_SKIP=true])
 	@if [ -z "$(NODE)" ]; then \
 		echo "Usage: make prepare-worker NODE=<node-name> [LABEL_SKIP=true]"; \
 		echo "       make prepare-worker NODE=<node-name> MAX_ATTEMPTS=120 LABEL_SKIP=true"; \
@@ -345,10 +348,10 @@ prepare-worker: ## [vanilla] Prepare a single worker node (NODE=<name> [LABEL_SK
 		echo "[SUCCESS] Node $(NODE) will be skipped by KMM"; \
 	fi
 
-prepare-workers: ## [vanilla] Prepare all worker nodes (rolling update) [LABEL_SKIP=true]
-	$(call require_platform,vanilla)
-	@NAMESPACE=$(NAMESPACE) VASTNFS_HELPER_IMAGE=$(HELPER_IMAGE) LABEL_SKIP=$(LABEL_SKIP) \
-		KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) \
+prepare-workers: ## Prepare all worker nodes (rolling update) [LABEL_SKIP=true]
+	@$(call check_required_env,VASTNFS_VERSION KMM_IMG_REPO)
+	@NAMESPACE=$(NAMESPACE) VASTNFS_VERSION=$(VASTNFS_VERSION) KMM_IMG_REPO=$(KMM_IMG_REPO) \
+		VASTNFS_HELPER_IMAGE=$(HELPER_IMAGE) LABEL_SKIP=$(LABEL_SKIP) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) \
 		./scripts/prepare_all_workers.sh $(if $(MAX_ATTEMPTS),--max-attempts $(MAX_ATTEMPTS),)
 
 install-systemd-unit: ## [vanilla] Install systemd unit to disable in-tree NFS on boot
@@ -478,7 +481,7 @@ install-secure-boot: kustomize ## Install VAST NFS KMM with secure boot support
 	export NAMESPACE="$(NAMESPACE)"; \
 	export KMM_PULL_SECRET="$(KMM_PULL_SECRET)"; \
 	export BUILD_IMAGE="$(BUILD_IMAGE)"; \
-	export KUSTOMIZE_DIR="$(KUSTOMIZE_DIR)"; \
+	export KUSTOMIZE_DIR="$(SECURE_BOOT_KUSTOMIZE_DIR)"; \
 	export KUSTOMIZE="$(KUSTOMIZE)"; \
 	export PLATFORM="$(PLATFORM)"; \
 	export KUBE_CMD="$(KUBE_CMD)"; \
@@ -491,7 +494,7 @@ install-secure-boot-with-keys: kustomize ## Install with existing secure boot ke
 	export NAMESPACE="$(NAMESPACE)"; \
 	export KMM_PULL_SECRET="$(KMM_PULL_SECRET)"; \
 	export BUILD_IMAGE="$(BUILD_IMAGE)"; \
-	export KUSTOMIZE_DIR="$(KUSTOMIZE_DIR)"; \
+	export KUSTOMIZE_DIR="$(SECURE_BOOT_KUSTOMIZE_DIR)"; \
 	export PRIVATE_KEY_FILE="$(PRIVATE_KEY_FILE)"; \
 	export PUBLIC_CERT_FILE="$(PUBLIC_CERT_FILE)"; \
 	export KUSTOMIZE="$(KUSTOMIZE)"; \
