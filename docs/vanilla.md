@@ -295,6 +295,7 @@ The `uninstall` target automatically:
 - Unloads kernel modules in the correct order
 - Removes all KMM resources (Module, ConfigMaps, ServiceAccounts, etc.)
 - Cleans up ImageStreams
+- Deletes the VAST NFS KMM namespace
 
 No manual steps required!
 
@@ -310,8 +311,7 @@ No manual steps required!
 | `make build-only FORCE=true` | Force rebuild - clears registry and node caches first |
 | `make install` | Install or upgrade VAST NFS (auto-detects and handles graceful unload) |
 | `make reinstall` | Reinstall when VAST NFS is already loaded (skips in-tree module removal) |
-| `make uninstall` | Complete removal (automatically performs graceful unload first) |
-| `make uninstall-all` | Complete removal including the namespace |
+| `make uninstall` | Complete removal, including namespace deletion (automatically performs graceful unload first; use `FORCE=true` to skip busy nodes) |
 
 #### Node Preparation (Rolling Updates)
 

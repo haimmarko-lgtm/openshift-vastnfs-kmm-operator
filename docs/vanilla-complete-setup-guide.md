@@ -1204,7 +1204,7 @@ kubectl debug node/<node-name> -it --image=alpine -- chroot /host modinfo sunrpc
 ### 11.3 Uninstall VAST NFS
 
 ```bash
-# Complete removal (graceful unload + delete all resources)
+# Complete removal (graceful unload + delete all resources and namespace)
 make uninstall
 ```
 
@@ -1236,8 +1236,7 @@ make uninstall
 | `make build-only FORCE=true` | Force rebuild - clears registry and node caches first |
 | `make install` | Install/upgrade VAST NFS with log monitoring |
 | `make reinstall` | Reinstall when VAST NFS is already loaded (skips in-tree module removal) |
-| `make uninstall` | Complete removal (graceful unload + delete resources) |
-| `make uninstall-all` | Complete removal including the namespace |
+| `make uninstall` | Complete removal, including namespace deletion (use `FORCE=true` to skip busy nodes) |
 
 #### Node Preparation
 

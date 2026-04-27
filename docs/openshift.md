@@ -224,6 +224,7 @@ The `uninstall` target automatically:
 - Unloads kernel modules in the correct order
 - Removes all KMM resources (Module, ConfigMaps, ServiceAccounts, etc.)
 - Cleans up ImageStreams
+- Deletes the VAST NFS KMM namespace
 
 No manual steps required!
 
@@ -237,7 +238,7 @@ No manual steps required!
 | `make install-secure-boot` | Resumable Secure Boot installation, key handling, MOK staging, and signed deployment |
 | `make generate-secure-boot-keys` | Optional helper to generate reusable Secure Boot signing keys |
 | `make verify-secure-boot` | Verify Secure Boot state and module signatures on all target nodes |
-| `make uninstall` | Complete removal (automatically performs graceful unload first) |
+| `make uninstall` | Complete removal, including namespace deletion (automatically performs graceful unload first; use `FORCE=true` to skip busy nodes) |
 | `make verify` | Deployment verification |
 | `make build-installer` | Generate consolidated manifest in `dist/install.yaml` |
 | `make help` | Show all targets |

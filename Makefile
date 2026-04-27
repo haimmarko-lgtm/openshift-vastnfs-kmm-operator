@@ -292,9 +292,9 @@ install: create-namespace kustomize ## Install VAST NFS KMM on the cluster with 
 	export KUBE_CMD="$(KUBE_CMD)"; \
 	./scripts/install_and_follow_logs.sh --follow-logs
 
-graceful-unload: ## Cordons nodes and gracefully unloads VAST NFS modules
+graceful-unload: ## Cordons nodes and gracefully unloads VAST NFS modules (FORCE=true skips busy nodes)
 	@echo "=== Gracefully Unloading VAST NFS Modules ==="
-	@NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) ./scripts/graceful_unload.sh
+	@NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) ./scripts/graceful_unload.sh $(if $(filter true,$(FORCE)),--force,)
 
 reinstall: create-namespace kustomize ## Reinstall when modules already loaded (skips in-tree removal)
 	@$(call check_required_env,VASTNFS_VERSION KMM_IMG_REPO NAMESPACE)
@@ -436,13 +436,13 @@ cleanup-node-driver: ## Remove VAST NFS driver artifacts from all nodes
 	@NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) VASTNFS_HELPER_IMAGE=$(HELPER_IMAGE) \
 		./scripts/cleanup_node_driver.sh
 
-uninstall: graceful-unload ## Remove VAST NFS KMM resources from the cluster (handles finalizers)
+uninstall: graceful-unload ## Remove VAST NFS KMM resources and namespace from the cluster (FORCE=true skips busy nodes)
 	@echo "Uninstalling VAST NFS KMM from namespace $(NAMESPACE)..."
 	@echo ""
-	@echo "[1/9] Removing VAST NFS driver artifacts from nodes..."
+	@echo "[1/10] Removing VAST NFS driver artifacts from nodes..."
 	@$(MAKE) cleanup-node-driver
 	@echo ""
-	@echo "[2/9] Cleaning up build pods..."
+	@echo "[2/10] Cleaning up build pods..."
 ifeq ($(PLATFORM),openshift)
 	@$(KUBE_CMD) get builds -n $(NAMESPACE) -o name 2>/dev/null | xargs -r -I {} $(KUBE_CMD) patch {} -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
 	@$(KUBE_CMD) get builds -n $(NAMESPACE) -o name 2>/dev/null | xargs -r $(KUBE_CMD) delete --force --grace-period=0 -n $(NAMESPACE) 2>/dev/null || true
@@ -450,7 +450,7 @@ ifeq ($(PLATFORM),openshift)
 endif
 	@$(KUBE_CMD) delete pods -l kmm.node.kubernetes.io/module.name=vastnfs -n $(NAMESPACE) --force --grace-period=0 2>/dev/null || true
 	@echo ""
-	@echo "[3/9] Deleting Module (force removing finalizers before/after delete)..."
+	@echo "[3/10] Deleting Module (force removing finalizers before/after delete)..."
 	@$(KUBE_CMD) patch module vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
 	@$(KUBE_CMD) delete module vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 --wait=false 2>/dev/null || true
 	@for attempt in 1 2 3 4 5 6; do \
@@ -459,7 +459,7 @@ endif
 		$(KUBE_CMD) wait --for=delete module/vastnfs -n $(NAMESPACE) --timeout=5s >/dev/null 2>&1 && break; \
 	done
 	@echo ""
-	@echo "[4/9] Deleting ModuleImagesConfig (force removing finalizers before/after delete)..."
+	@echo "[4/10] Deleting ModuleImagesConfig (force removing finalizers before/after delete)..."
 	@$(KUBE_CMD) patch moduleimagesconfig vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
 	@$(KUBE_CMD) delete moduleimagesconfig vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 --wait=false 2>/dev/null || true
 	@for attempt in 1 2 3 4 5 6; do \
@@ -468,25 +468,25 @@ endif
 		$(KUBE_CMD) wait --for=delete moduleimagesconfig/vastnfs -n $(NAMESPACE) --timeout=5s >/dev/null 2>&1 && break; \
 	done
 	@echo ""
-	@echo "[5/9] Cleaning up any remaining KMM-managed pods..."
+	@echo "[5/10] Cleaning up any remaining KMM-managed pods..."
 	@$(KUBE_CMD) delete pods -n $(NAMESPACE) -l kmm.node.kubernetes.io/module.name=vastnfs --force --grace-period=0 2>/dev/null || true
 	@$(KUBE_CMD) delete pods -n $(NAMESPACE) -l kmm.node.kubernetes.io/resource-type=BuildImage --force --grace-period=0 2>/dev/null || true
 	@echo ""
-	@echo "[6/9] Deleting ConfigMaps..."
+	@echo "[6/10] Deleting ConfigMaps..."
 	@$(KUBE_CMD) delete configmap vastnfs-kmm-build-dockerfile -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete configmap -l app.kubernetes.io/name=vastnfs-kmm -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@echo ""
-	@echo "[7/9] Deleting ServiceAccount and RBAC resources..."
+	@echo "[7/10] Deleting ServiceAccount and RBAC resources..."
 	@$(KUBE_CMD) delete serviceaccount vastnfs-kmm-sa -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete serviceaccount -l app.kubernetes.io/name=vastnfs-kmm -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=vastnfs-kmm 2>/dev/null || true
 ifeq ($(PLATFORM),openshift)
 	@echo ""
-	@echo "[7b/9] Cleaning up ImageStream..."
+	@echo "[7b/10] Cleaning up ImageStream..."
 	@$(KUBE_CMD) delete imagestream vastnfs -n $(NAMESPACE) 2>/dev/null || true
 endif
 	@echo ""
-	@echo "[8/9] Removing remaining namespaced resources..."
+	@echo "[8/10] Removing remaining namespaced resources..."
 	@if $(KUBE_CMD) get namespace $(NAMESPACE) >/dev/null 2>&1; then \
 		for resource in $$($(KUBE_CMD) api-resources --namespaced=true --verbs=list,delete -o name 2>/dev/null | sort -u); do \
 			case "$$resource" in \
@@ -499,20 +499,17 @@ endif
 		done; \
 	fi
 	@echo ""
-	@echo "[9/9] Removing node labels..."
+	@echo "[9/10] Removing node labels..."
 	@for node in $$($(KUBE_CMD) get nodes -l vastnfs.vast.com/deploy=true -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do \
 		echo "  Removing label from node: $$node"; \
 		$(KUBE_CMD) label node "$$node" vastnfs.vast.com/deploy- 2>/dev/null || true; \
 	done
 	@echo ""
-	@echo "=== Uninstall Complete ==="
-	@echo "Namespace $(NAMESPACE) was left in place. Use 'make uninstall-all' to delete it too."
-
-uninstall-all: uninstall ## Remove VAST NFS KMM including the namespace
-	@echo ""
-	@echo "Deleting namespace $(NAMESPACE)..."
+	@echo "[10/10] Deleting namespace $(NAMESPACE)..."
 	@$(KUBE_CMD) delete namespace $(NAMESPACE) --ignore-not-found --wait=false 2>/dev/null || true
 	@echo "Namespace deletion initiated (may take a moment to complete)."
+	@echo ""
+	@echo "=== Uninstall Complete ==="
 
 ######################
 # SECURE BOOT TARGETS
@@ -760,12 +757,13 @@ help: ## Show available targets
 				p "NODE" "Limit verification to one node."; \
 				;; \
 			graceful-unload) \
-				echo "Usage: make graceful-unload [parameters]"; \
+				echo "Usage: make graceful-unload [FORCE=true] [parameters]"; \
 				echo ""; \
 				echo "Cordons target nodes, unmounts NFS clients, stops RPC services, and unloads VAST NFS modules."; \
 				echo ""; \
 				echo "Parameters:"; \
 				common_params; \
+				p "FORCE" "Set true to pass --force and skip nodes where modules are still busy."; \
 				;; \
 			reinstall) \
 				echo "Usage: make reinstall VASTNFS_VERSION=<version> KMM_IMG_REPO=<repo> [parameters]"; \
@@ -842,13 +840,14 @@ help: ## Show available targets
 				common_params; \
 				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
 				;; \
-			uninstall|uninstall-all) \
-				echo "Usage: make $(HELP_TOPIC) [parameters]"; \
+			uninstall) \
+				echo "Usage: make uninstall [FORCE=true] [parameters]"; \
 				echo ""; \
-				echo "Removes VAST NFS KMM resources. uninstall-all also deletes the namespace."; \
+				echo "Removes VAST NFS KMM resources and deletes the namespace."; \
 				echo ""; \
 				echo "Parameters:"; \
 				common_params; \
+				p "FORCE" "Set true to skip nodes where modules are still busy during graceful unload."; \
 				p "HELPER_IMAGE" "Image used while cleaning node driver artifacts. Default: alpine:latest."; \
 				;; \
 			install-secure-boot) \

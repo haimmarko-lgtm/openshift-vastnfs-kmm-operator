@@ -301,7 +301,7 @@ if [ "$modules_in_use" = true ] && [ "$FORCE_MODE" != "true" ]; then
     print_info "Options:"
     print_info "  1. Stop NFS workloads on affected nodes and retry"
     print_info "  2. Use 'make reinstall' instead (safe for already-loaded modules)"
-    print_info "  3. Run './scripts/graceful_unload.sh --force' to skip affected nodes"
+    print_info "  3. Run 'make uninstall FORCE=true' to skip affected nodes during uninstall"
     exit 1
 fi
 
