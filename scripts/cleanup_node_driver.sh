@@ -15,7 +15,7 @@ source "${SCRIPT_DIR}/common.sh"
 NAMESPACE="${NAMESPACE:-$DEFAULT_NAMESPACE}"
 HELPER_IMAGE="${VASTNFS_HELPER_IMAGE:-${HELPER_IMAGE:-alpine:latest}}"
 
-if [[ "${PLATFORM}" == "openshift" ]] && command -v oc >/dev/null 2>&1; then
+if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]] && command -v oc >/dev/null 2>&1; then
     USE_OC_DEBUG=true
 else
     USE_OC_DEBUG=false
@@ -111,7 +111,7 @@ NODE_CLEANUP
 
 _run_on_node_openshift() {
     local node="$1" script_body="$2"
-    oc debug "node/${node}" -- chroot /host bash -c "${script_body}" 2>&1 | sed 's/^/  /'
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c "${script_body}" 2>&1 | sed 's/^/  /'
 }
 
 _run_on_node_vanilla() {

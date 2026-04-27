@@ -44,7 +44,7 @@ fi
 
 _check_openshift_node() {
     local node="$1"
-    oc debug "node/${node}" -- chroot /host bash -c '
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c '
         if [[ -e /sys/module/sunrpc/parameters/nfs_bundle_version ]] || \
            [[ -e /sys/module/sunrpc/parameters/nfs_bundle_git_version ]]; then
             echo "VASTNFS_LOADED"

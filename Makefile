@@ -15,10 +15,11 @@ ifndef PLATFORM
 PLATFORM := $(shell ./scripts/detect_platform.sh 2>/dev/null || echo vanilla)
 endif
 
-# KUBE_CMD: the Kubernetes CLI to use. Defaults to `oc` on OpenShift for
-# backward compatibility, and `kubectl` everywhere else.
+# KUBE_CMD: the Kubernetes CLI to use. Prefer `oc` on OpenShift when it is
+# installed, but fall back to `kubectl` so OpenShift-compatible flows still work
+# on hosts that only have kubectl. Vanilla defaults to kubectl.
 ifeq ($(PLATFORM),openshift)
-    KUBE_CMD ?= oc
+    KUBE_CMD ?= $(shell if command -v oc >/dev/null 2>&1; then echo oc; elif command -v kubectl >/dev/null 2>&1; then echo kubectl; else echo oc; fi)
 else
     KUBE_CMD ?= kubectl
 endif
@@ -571,6 +572,9 @@ endif
 # VERIFICATION
 ######################
 verify: ## Verify deployment (VERBOSE=true for detailed, NODE=<name> for single node)
+	@echo "=== Verifying VAST NFS Deployment ==="
+	@echo "Platform: $(PLATFORM) (KUBE_CMD=$(KUBE_CMD))"
+	@echo ""
 	@VERBOSE=$(VERBOSE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) \
 		./scripts/verify_deployment.sh --namespace $(NAMESPACE) $(if $(NODE),--node $(NODE),)
 

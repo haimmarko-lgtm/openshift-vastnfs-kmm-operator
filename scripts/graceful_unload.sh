@@ -38,7 +38,7 @@ NAMESPACE="${NAMESPACE:-$DEFAULT_NAMESPACE}"
 
 # Single place where we pick the platform flavor.
 USE_OC_DEBUG=false
-if [[ "${PLATFORM}" == "openshift" ]] && command -v oc >/dev/null 2>&1; then
+if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]] && command -v oc >/dev/null 2>&1; then
     USE_OC_DEBUG=true
 fi
 
@@ -193,7 +193,7 @@ _run_on_node_openshift() {
     local node="$1" script_body="$2"
     # Pass the generated script as the command argument. Some oc versions do
     # not support stdin for `oc debug`, so avoid relying on `bash -s`.
-    oc debug "node/${node}" -- chroot /host bash -c "${script_body}" 2>&1 | sed 's/^/  /'
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c "${script_body}" 2>&1 | sed 's/^/  /'
 }
 
 _run_on_node_vanilla() {

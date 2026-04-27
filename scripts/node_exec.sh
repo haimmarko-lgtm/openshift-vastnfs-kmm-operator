@@ -75,10 +75,10 @@ node_exec() {
     local kube
     kube="$(_node_exec_pick_kubectl)"
 
-    # Prefer `oc debug` when we're on OpenShift AND `oc` is on PATH -- it's
-    # concise, well-known, and doesn't leave a pod behind on failure.
-    if [ "${platform}" = "openshift" ] && command -v oc >/dev/null 2>&1; then
-        oc debug "node/${node}" -- chroot /host bash -c "${cmd}"
+    # Prefer `oc debug` only when the selected CLI is oc; otherwise use the
+    # pod-based path so kubectl-only environments keep working.
+    if [ "${platform}" = "openshift" ] && [ "${kube}" = "oc" ] && command -v oc >/dev/null 2>&1; then
+        "${kube}" debug "node/${node}" -- chroot /host bash -c "${cmd}"
         return $?
     fi
 

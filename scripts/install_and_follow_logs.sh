@@ -20,7 +20,7 @@ FOLLOW_LOGS=false
 
 # On OpenShift `oc debug node` is the preferred node-inspection mechanism.
 USE_OC_DEBUG=false
-if [[ "${PLATFORM}" == "openshift" ]] && command -v oc >/dev/null 2>&1; then
+if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]] && command -v oc >/dev/null 2>&1; then
     USE_OC_DEBUG=true
 fi
 
@@ -191,7 +191,7 @@ install_vastnfs() {
 # ---- Node version check (platform-aware) ----------------------------------
 check_vastnfs_version_on_node_openshift() {
     local node="$1"
-    oc debug "node/${node}" -- chroot /host bash -c '
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c '
         if [[ -e /sys/module/sunrpc/parameters/nfs_bundle_version ]]; then
             cat /sys/module/sunrpc/parameters/nfs_bundle_version
         fi

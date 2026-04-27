@@ -9,8 +9,8 @@
 #   ./verify_deployment.sh --node <name>      # Restrict to a single node
 #
 # Platform selection is driven by scripts/common.sh (PLATFORM / KUBE_CMD).
-# Node-level probing uses `oc debug node` on OpenShift when `oc` is
-# available, and falls back to a short-lived privileged pod (busybox +
+# Node-level probing uses `oc debug node` on OpenShift when `KUBE_CMD=oc`,
+# and falls back to a short-lived privileged pod (busybox +
 # nsenter / hostPath) on vanilla Kubernetes.
 
 set -e
@@ -33,7 +33,7 @@ _use_oc_debug() {
     if [ "${USE_POD_NODE_PROBE}" = "true" ]; then
         return 1
     fi
-    if [ "${PLATFORM:-}" = "openshift" ] && command -v oc >/dev/null 2>&1; then
+    if [ "${PLATFORM:-}" = "openshift" ] && [ "${KUBE_CMD:-}" = "oc" ] && command -v oc >/dev/null 2>&1; then
         return 0
     fi
     return 1
@@ -204,7 +204,7 @@ get_node_kernel() {
 
 _probe_node_vastnfs_openshift() {
     local node="$1"
-    oc debug "node/${node}" -- chroot /host bash -c '
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c '
         if [[ -e /sys/module/sunrpc/parameters/nfs_bundle_git_version ]]; then
             cat /sys/module/sunrpc/parameters/nfs_bundle_git_version
         elif [[ -e /sys/module/sunrpc/parameters/nfs_bundle_version ]]; then
@@ -291,12 +291,12 @@ check_node_vastnfs_status() {
 
 _probe_signature_openshift() {
     local node="$1"
-    oc debug "node/${node}" -- chroot /host modinfo sunrpc 2>/dev/null | grep -E "^signature:" | head -1 || echo ""
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host modinfo sunrpc 2>/dev/null | grep -E "^signature:" | head -1 || echo ""
 }
 
 _probe_sb_state_openshift() {
     local node="$1"
-    oc debug "node/${node}" -- chroot /host bash -c '
+    "${KUBE_CMD}" debug "node/${node}" -- chroot /host bash -c '
         if command -v mokutil >/dev/null 2>&1; then
             mokutil --sb-state 2>/dev/null
         else
@@ -821,7 +821,7 @@ show_troubleshooting() {
     echo ""
     echo "2. Check KMM operator logs:"
     if [[ "${PLATFORM}" == "openshift" ]]; then
-        echo "   oc logs -n openshift-kmm deployment/kmm-operator-controller | grep -i $MODULE_NAME"
+        echo "   ${KUBE_CMD} logs -n openshift-kmm deployment/kmm-operator-controller | grep -i $MODULE_NAME"
     else
         echo "   ${KUBE_CMD} logs -n kmm-operator-system deployment/kmm-operator-controller | grep -i $MODULE_NAME"
     fi
@@ -831,8 +831,8 @@ show_troubleshooting() {
     echo "   # Then redeploy using make install or scripts"
     echo ""
     echo "4. Check node kernel version compatibility:"
-    if [[ "${PLATFORM}" == "openshift" ]]; then
-        echo "   oc debug node/<node-name> -- chroot /host uname -r"
+    if _use_oc_debug; then
+        echo "   ${KUBE_CMD} debug node/<node-name> -- chroot /host uname -r"
     else
         echo "   ${KUBE_CMD} debug node/<node-name> -it --image=busybox -- chroot /host uname -r"
     fi
