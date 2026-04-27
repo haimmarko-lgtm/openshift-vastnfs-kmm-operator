@@ -300,21 +300,15 @@ reinstall: create-namespace kustomize ## Reinstall when modules already loaded (
 	@$(call check_required_env,VASTNFS_VERSION KMM_IMG_REPO NAMESPACE)
 	@echo "=== Safe Reinstall Mode ==="
 	@echo "This mode is for scenarios where VAST NFS is already loaded on nodes."
-	@echo "It skips in-tree module removal to prevent 'module in use' errors."
+	@echo "It applies the reinstall overlay in place and skips in-tree module removal."
 	@echo ""
 	@if NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) ./scripts/check_vastnfs_loaded.sh 2>/dev/null; then \
-		echo "VAST NFS is loaded - using reinstall overlay (no inTreeModulesToRemove)"; \
+		echo "VAST NFS is loaded - applying reinstall overlay without deleting the Module"; \
 	else \
 		echo "WARNING: VAST NFS not detected. Consider using 'make install' for fresh installation."; \
 		echo "Proceeding with reinstall anyway..."; \
 	fi
 	@echo ""
-	@echo "Removing finalizers from existing Module (if any)..."
-	@$(KUBE_CMD) get modules -n $(NAMESPACE) -o name 2>/dev/null | xargs -I {} $(KUBE_CMD) patch {} -n $(NAMESPACE) -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
-	@$(KUBE_CMD) delete module vastnfs -n $(NAMESPACE) --ignore-not-found=true --wait=false 2>/dev/null || true
-	@$(KUBE_CMD) wait --for=delete module/vastnfs -n $(NAMESPACE) --timeout=30s 2>/dev/null || true
-	@$(KUBE_CMD) delete pods -n $(NAMESPACE) -l kmm.node.kubernetes.io/module.name=vastnfs --ignore-not-found=true 2>/dev/null || true
-	@sleep 2
 	@echo "Applying Module with reinstall overlay..."
 	@export VASTNFS_VERSION="$(VASTNFS_VERSION)"; \
 	export KMM_IMG="$(KMM_IMG_REPO):$(KMM_IMG_TAG)"; \
