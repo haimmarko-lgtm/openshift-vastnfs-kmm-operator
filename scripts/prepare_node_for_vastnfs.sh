@@ -32,12 +32,12 @@ kubectl() {
             cordon|drain|uncordon)
                 local adm_cmd="$1"
                 shift
-                oc adm "$adm_cmd" "$@"
+                command oc adm "$adm_cmd" "$@"
                 return
                 ;;
         esac
     fi
-    "${KUBE_CMD}" "$@"
+    command "${KUBE_CMD}" "$@"
 }
 
 resolve_image_reference() {
@@ -61,7 +61,7 @@ resolve_image_reference() {
         return
     fi
 
-    resolved=$(oc get istag "${stream}:${tag}" -n "$NAMESPACE" \
+    resolved=$(command oc get istag "${stream}:${tag}" -n "$NAMESPACE" \
         -o jsonpath='{.image.dockerImageReference}' 2>/dev/null || true)
 
     if [[ -n "$resolved" ]]; then

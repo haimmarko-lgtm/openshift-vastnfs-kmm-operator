@@ -20,12 +20,12 @@ kubectl() {
             cordon|drain|uncordon)
                 local adm_cmd="$1"
                 shift
-                oc adm "$adm_cmd" "$@"
+                command oc adm "$adm_cmd" "$@"
                 return
                 ;;
         esac
     fi
-    "${KUBE_CMD}" "$@"
+    command "${KUBE_CMD}" "$@"
 }
 
 # Colors
