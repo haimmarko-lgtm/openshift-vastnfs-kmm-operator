@@ -325,7 +325,7 @@ reinstall: create-namespace kustomize ## Reinstall when modules already loaded (
 	if [ ! -d "$$REINSTALL_DIR" ]; then REINSTALL_DIR="k8s/overlays/reinstall"; fi; \
 	cd "$$REINSTALL_DIR" && \
 	$(KUSTOMIZE) edit set namespace $(NAMESPACE) 2>/dev/null || true && \
-	$(KUSTOMIZE) build . | envsubst | $(KUBE_CMD) apply -f -
+	$(KUSTOMIZE) build . | envsubst '$$VASTNFS_VERSION $$KMM_IMG $$NAMESPACE $$KMM_PULL_SECRET $$BUILD_IMAGE' | $(KUBE_CMD) apply -f -
 	@echo ""
 	@echo "=== Reinstall Complete ==="
 	@echo "Monitor with: $(KUBE_CMD) get pods -n $(NAMESPACE) -w"
