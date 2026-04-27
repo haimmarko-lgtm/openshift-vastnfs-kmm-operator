@@ -157,6 +157,19 @@ else
 REQ_INSTALL_ENV := VASTNFS_VERSION KMM_IMG_REPO NAMESPACE
 endif
 
+HELP_TOPIC := $(if $(filter help,$(firstword $(MAKECMDGOALS))),$(word 2,$(MAKECMDGOALS)))
+HELP_TOPIC_GOALS := $(filter-out help,$(if $(filter help,$(firstword $(MAKECMDGOALS))),$(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))))
+
+.PHONY: help
+
+ifneq ($(HELP_TOPIC),)
+.PHONY: $(HELP_TOPIC_GOALS)
+$(HELP_TOPIC_GOALS):
+	@:
+endif
+
+ifeq ($(HELP_TOPIC),)
+
 .PHONY: check_required_env
 
 ######################
@@ -637,14 +650,268 @@ migrate-from-legacy: ## Migrate a legacy OpenShift install to the unified manife
 		KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) VASTNFS_VERSION=$(VASTNFS_VERSION) \
 		./scripts/migrate_from_legacy.sh
 
+endif
+
 ######################
 # HELP
 ######################
 help: ## Show available targets
-	@echo "VAST NFS KMM Operator (platform-aware)"
-	@echo ""
-	@echo "Current platform: $(PLATFORM)  (KUBE_CMD=$(KUBE_CMD))"
-	@echo "Override with:    make <target> PLATFORM=openshift|vanilla"
-	@echo ""
-	@echo "Available targets:"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@if [ -z "$(HELP_TOPIC)" ]; then \
+		echo "VAST NFS KMM Operator (platform-aware)"; \
+		echo ""; \
+		echo "Current platform: $(PLATFORM)  (KUBE_CMD=$(KUBE_CMD))"; \
+		echo "Override with:    make <target> PLATFORM=openshift|vanilla"; \
+		echo ""; \
+		echo "Usage:"; \
+		echo "  make help              Show available targets"; \
+		echo "  make help <target>     Show detailed target parameters"; \
+		echo ""; \
+		echo "Available targets:"; \
+		awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST); \
+	else \
+		p() { printf "  %-30s %s\n" "$$1" "$$2"; }; \
+		common_params() { \
+			p "PLATFORM" "Target platform: openshift or vanilla. Defaults to scripts/detect_platform.sh."; \
+			p "KUBE_CMD" "Kubernetes CLI. Defaults to oc/kubectl based on PLATFORM."; \
+			p "NAMESPACE" "Namespace for VAST NFS KMM resources. Default: vastnfs-kmm."; \
+			p "VASTNFS_VERSION" "VAST NFS version to deploy or build. Required on vanilla; OpenShift defaults to 4.0.35."; \
+			p "KMM_IMG_REPO" "Kernel module image repository. Required on vanilla; OpenShift defaults to the internal registry."; \
+			p "KMM_IMG_TAG" "Kernel module image tag template. Default: kernel version plus VASTNFS_VERSION."; \
+			p "KMM_PULL_SECRET" "Optional image pull secret name; uses the with-pull-secret overlay when set."; \
+			p "KUSTOMIZE_DIR" "Overlay to render for normal installs. Defaults to the platform base overlay."; \
+			p "NODE_SELECTOR" "Optional key=value selector for limiting Module deployment and checks."; \
+		}; \
+		echo "VAST NFS KMM Operator help: $(HELP_TOPIC)"; \
+		echo ""; \
+		case "$(HELP_TOPIC)" in \
+			help) \
+				echo "Usage: make help [target]"; \
+				echo ""; \
+				echo "Shows the target list or detailed help for one target."; \
+				echo ""; \
+				echo "Parameters:"; \
+				p "PLATFORM" "Affects auto-detected defaults displayed in help."; \
+				p "KUBE_CMD" "Affects auto-detected CLI displayed in help."; \
+				;; \
+			show-config) \
+				echo "Usage: make show-config [parameters]"; \
+				echo ""; \
+				echo "Prints the resolved platform, Kubernetes CLI, image, namespace, overlay, and node-selection configuration."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "BUILD_IMAGE" "Vanilla build base image selected by scripts/detect_build_image.sh when unset."; \
+				p "HELPER_IMAGE" "Helper image for vanilla/nsenter pods. Default: alpine:latest."; \
+				;; \
+			kustomize|install-kustomize) \
+				echo "Usage: make $(HELP_TOPIC) [parameters]"; \
+				echo ""; \
+				echo "Downloads the pinned kustomize binary into the local bin directory if it is missing."; \
+				echo ""; \
+				echo "Parameters:"; \
+				p "LOCALBIN" "Directory for local tools. Default: ./bin."; \
+				p "KUSTOMIZE" "Path to the kustomize binary. Default: \$$(LOCALBIN)/kustomize."; \
+				p "KUSTOMIZE_VERSION" "Kustomize release to download. Default: v5.4.3."; \
+				;; \
+			create-namespace) \
+				echo "Usage: make create-namespace [parameters]"; \
+				echo ""; \
+				echo "Creates the target namespace when it does not already exist."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			install) \
+				echo "Usage: make install VASTNFS_VERSION=<version> [parameters]"; \
+				echo ""; \
+				echo "Installs or upgrades VAST NFS KMM. If VAST NFS is already loaded, it performs a graceful unload first."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "BUILD_IMAGE" "Vanilla build base image. Auto-detected when unset."; \
+				p "ALLOW_UNSIGNED_ON_SECURE_BOOT" "Set true to bypass the guard that blocks unsigned installs on Secure Boot nodes."; \
+				;; \
+			build-installer) \
+				echo "Usage: make build-installer VASTNFS_VERSION=<version> [parameters]"; \
+				echo ""; \
+				echo "Renders the selected kustomize overlay into dist/install.yaml without applying it."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			build-only) \
+				echo "Usage: make build-only VASTNFS_VERSION=<version> KMM_IMG_REPO=<repo> [parameters]"; \
+				echo ""; \
+				echo "Builds kernel module images into the configured registry without deploying worker pods."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "FORCE" "Set true to clear existing images/caches before rebuilding."; \
+				p "HELPER_IMAGE" "Image used for helper pods. Default: alpine:latest."; \
+				;; \
+			verify) \
+				echo "Usage: make verify [VERBOSE=true] [NODE=<node>] [parameters]"; \
+				echo ""; \
+				echo "Checks deployment health across the cluster or one selected node."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "VERBOSE" "Set true for detailed node and pod diagnostics."; \
+				p "NODE" "Limit verification to one node."; \
+				;; \
+			graceful-unload) \
+				echo "Usage: make graceful-unload [parameters]"; \
+				echo ""; \
+				echo "Cordons target nodes, unmounts NFS clients, stops RPC services, and unloads VAST NFS modules."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			reinstall) \
+				echo "Usage: make reinstall VASTNFS_VERSION=<version> KMM_IMG_REPO=<repo> [parameters]"; \
+				echo ""; \
+				echo "Re-applies the Module when VAST NFS is already loaded, using the reinstall overlay to avoid in-tree removal."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "BUILD_IMAGE" "Vanilla build base image. Auto-detected when unset."; \
+				;; \
+			prepare-worker) \
+				echo "Usage: make prepare-worker NODE=<node> VASTNFS_VERSION=<version> KMM_IMG_REPO=<repo> [parameters]"; \
+				echo ""; \
+				echo "Prepares one worker node by draining it, unloading in-tree NFS, and allowing KMM to load VAST NFS."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "NODE" "Worker node to prepare. Required."; \
+				p "LABEL_SKIP" "Set true to remove the KMM enabled label after success so the node is skipped later."; \
+				p "MAX_ATTEMPTS" "Maximum readiness/build polling attempts passed to the preparation script."; \
+				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
+				;; \
+			prepare-workers) \
+				echo "Usage: make prepare-workers VASTNFS_VERSION=<version> KMM_IMG_REPO=<repo> [parameters]"; \
+				echo ""; \
+				echo "Runs worker preparation as a rolling update across all worker nodes."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "LABEL_SKIP" "Set true to remove KMM enabled labels after each successful node preparation."; \
+				p "MAX_ATTEMPTS" "Maximum readiness/build polling attempts passed to the preparation script."; \
+				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
+				;; \
+			install-systemd-unit) \
+				echo "Usage: make install-systemd-unit PLATFORM=vanilla [parameters]"; \
+				echo ""; \
+				echo "Installs a systemd unit on nodes to prevent in-tree NFS modules from loading at boot. Vanilla only."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
+				;; \
+			add-node-to-kmm|remove-node-from-kmm) \
+				echo "Usage: make $(HELP_TOPIC) NODE=<node> [parameters]"; \
+				echo ""; \
+				echo "Adds or removes the vastnfs-kmm/enabled label and keeps the Module selector aligned."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "NODE" "Node to include in or exclude from KMM deployment. Required."; \
+				;; \
+			show-node-labels) \
+				echo "Usage: make show-node-labels [parameters]"; \
+				echo ""; \
+				echo "Shows the vastnfs-kmm/enabled label status for every node."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			delete-module) \
+				echo "Usage: make delete-module [parameters]"; \
+				echo ""; \
+				echo "Deletes the KMM Module and worker pods while keeping built images and other resources."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			cleanup-node-driver) \
+				echo "Usage: make cleanup-node-driver [parameters]"; \
+				echo ""; \
+				echo "Removes VAST NFS driver artifacts from cluster nodes."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
+				;; \
+			uninstall|uninstall-all) \
+				echo "Usage: make $(HELP_TOPIC) [parameters]"; \
+				echo ""; \
+				echo "Removes VAST NFS KMM resources. uninstall-all also deletes the namespace."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "HELPER_IMAGE" "Image used while cleaning node driver artifacts. Default: alpine:latest."; \
+				;; \
+			install-secure-boot) \
+				echo "Usage: make install-secure-boot VASTNFS_VERSION=<version> [parameters]"; \
+				echo ""; \
+				echo "Installs signed VAST NFS modules, creating or reusing signing keys and staging MOK enrollment when needed."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "SECURE_BOOT_KUSTOMIZE_DIR" "Secure Boot overlay to render. Default: k8s/overlays/\$$(PLATFORM)/secure-boot."; \
+				p "SECURE_BOOT_KMM_IMG_TAG" "Image tag for signed module images. Default: \$$(KMM_IMG_TAG)-secureboot."; \
+				p "PRIVATE_KEY_FILE" "Existing signing private key. Must be paired with PUBLIC_CERT_FILE."; \
+				p "PUBLIC_CERT_FILE" "Existing signing public DER certificate. Must be paired with PRIVATE_KEY_FILE."; \
+				p "KEYS_DIR" "Directory for generated/reused signing keys."; \
+				p "KEY_NAME" "Generated/reused signing key prefix."; \
+				p "MOK_PASSWORD_FILE" "File containing the one-time MOK enrollment password."; \
+				p "MOK_PASSWORD" "One-time MOK enrollment password, mainly for lab use."; \
+				p "MOK_PROMPT_TIMEOUT" "MokManager prompt timeout in seconds. Default: 60."; \
+				p "SIGNING_KEY_SECRET" "Secret name for the signing private key."; \
+				p "SIGNING_CERT_SECRET" "Secret name for the signing public certificate."; \
+				p "IMAGE_REPO_SECRET" "Secret name referenced by the secure-boot overlay for registry auth."; \
+				p "BUILD_IMAGE" "Vanilla build base image. Auto-detected when unset."; \
+				p "HELPER_IMAGE" "Image used for helper/nsenter pods. Default: alpine:latest."; \
+				;; \
+			generate-secure-boot-keys) \
+				echo "Usage: make generate-secure-boot-keys [parameters]"; \
+				echo ""; \
+				echo "Generates reusable Secure Boot signing keys."; \
+				echo ""; \
+				echo "Parameters:"; \
+				p "KEYS_DIR" "Keys output directory."; \
+				p "KEY_NAME" "Signing key file prefix."; \
+				p "CERT_VALIDITY_DAYS" "Certificate validity period in days."; \
+				;; \
+			verify-secure-boot) \
+				echo "Usage: make verify-secure-boot [parameters]"; \
+				echo ""; \
+				echo "Checks Module status, module signatures, and Secure Boot state on target nodes."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			clean-debug-pods) \
+				echo "Usage: make clean-debug-pods [parameters]"; \
+				echo ""; \
+				echo "Deletes leftover debug/helper pods created by the install, verify, unload, and Secure Boot scripts."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				;; \
+			migrate-from-legacy) \
+				echo "Usage: make migrate-from-legacy [APPLY=true] [ALLOW_RELOAD=true] [parameters]"; \
+				echo ""; \
+				echo "Migrates legacy OpenShift resources to the unified manifest layout. Defaults to dry-run."; \
+				echo ""; \
+				echo "Parameters:"; \
+				common_params; \
+				p "APPLY" "Set true to perform the migration. Default: false dry-run."; \
+				p "ALLOW_RELOAD" "Set true to allow actions that may reload VAST NFS during migration."; \
+				;; \
+			*) \
+				echo "Unknown help topic: $(HELP_TOPIC)"; \
+				echo "Run 'make help' to list available targets."; \
+				;; \
+		esac; \
+	fi

@@ -97,72 +97,23 @@ and the rolling-update playbook.
 
 ---
 
-## Key Makefile targets
+## Makefile help
 
-Run `make help` to see everything. The targets below are the most common.
+Use the Makefile help as the source of truth for targets and parameters:
 
-| Target                                 | Works on                | Description |
-| -------------------------------------- | ----------------------- | ----------- |
-| `make show-config`                     | all                     | Print resolved `PLATFORM`, `KUBE_CMD`, `VASTNFS_VERSION`, `KMM_IMG_REPO`, etc. |
-| `make install`                         | all                     | Install / upgrade VAST NFS; auto-detects already-loaded module and performs graceful unload first. |
-| `make verify` (`VERBOSE=true`, `NODE=`) | all                     | Compact or detailed health check of every node in the cluster. |
-| `make graceful-unload`                 | all                     | Cordon nodes, unmount, stop RPC, unload modules. |
-| `make uninstall` / `make uninstall-all` | all                     | Remove KMM Module + RBAC; `uninstall-all` also deletes the namespace. |
-| `make build-installer`                 | all                     | Render a single `dist/install.yaml` (useful for GitOps). |
-| `make install-secure-boot`             | all                     | Resumable Secure Boot signing flow; pass key/MOK variables as needed. |
-| `make generate-secure-boot-keys`       | all                     | Optional helper to generate reusable signing keys before install. |
-| `make verify-secure-boot`              | all                     | Verify Secure Boot state and module signatures on all target nodes. |
-| `make build-only` (`FORCE=true`)       | all (vanilla-focused)   | Build images into your registry without deploying any worker pods. |
-| `make reinstall`                       | all                     | Re-apply the Module while VAST NFS is already loaded (skips in-tree removal). |
-| `make prepare-worker NODE=<name>`      | **vanilla only**        | Drain a node, unload in-tree NFS, let KMM load VAST NFS. |
-| `make prepare-workers`                 | **vanilla only**        | Same as above, but rolling across all workers. |
-| `make install-systemd-unit`            | **vanilla only**        | Install a systemd unit on every node blocking in-tree NFS at boot. |
-| `make add-node-to-kmm NODE=<name>` / `remove-node-from-kmm` | all | Manage the `vastnfs-kmm/enabled` label + Module selector. |
-| `make show-node-labels`                | all                     | Print the `vastnfs-kmm/enabled` label status for every node. |
-| `make clean-debug-pods`                | all                     | Clean up any leftover helper/debug pods. |
-| `make migrate-from-legacy`             | OCP migrations          | Label/annotate existing OCP objects for the unified manifest layout (see [MIGRATION.md](MIGRATION.md)). |
-
-Vanilla-only targets refuse to run on OpenShift with a `[SKIP]` message; set `PLATFORM=vanilla`
-explicitly if you really need to bypass the guard.
-
----
-
-## Repository layout
-
-```
-├── Makefile                     # Single, platform-aware dispatcher
-├── scripts/
-│   ├── detect_platform.sh       # openshift|vanilla auto-detection
-│   ├── common.sh                # shared helpers (PLATFORM / KUBE_CMD aware)
-│   ├── secure_boot_common.sh    # shared Secure Boot and MOK helpers
-│   ├── install_and_follow_logs.sh
-│   ├── install_with_secure_boot.sh
-│   ├── verify_deployment.sh
-│   ├── graceful_unload.sh
-│   ├── check_vastnfs_loaded.sh
-│   ├── generate_secure_boot_keys.sh
-│   ├── migrate_from_legacy.sh   # NEW: re-label existing OCP installs
-│   ├── prepare_node_for_vastnfs.sh    # vanilla
-│   ├── prepare_all_workers.sh         # vanilla
-│   ├── build_only_monitor.sh          # vanilla
-│   ├── force_clear_images.sh          # vanilla
-│   ├── install_systemd_unit.sh        # vanilla
-│   └── detect_build_image.sh          # vanilla
-├── k8s/
-│   ├── base/                    # Thin re-export of overlays/openshift/base (legacy OCP path)
-│   └── overlays/
-│       ├── openshift/{base,secure-boot,with-pull-secret}
-│       ├── vanilla/{base,secure-boot,with-pull-secret,reinstall}
-│       ├── secure-boot/         # Legacy alias → openshift/secure-boot
-│       └── with-pull-secret/    # Legacy alias → openshift/with-pull-secret
-├── systemd/                     # disable-intree-nfs.service (vanilla helper)
-└── docs/                        # Platform guides + design archive
+```bash
+make help
+make help install
+make help install-secure-boot
+make help prepare-worker
 ```
 
-Backward compatibility: every historical OpenShift path (`k8s/base`, `k8s/overlays/secure-boot`,
-`k8s/overlays/with-pull-secret`) continues to resolve to the same OpenShift manifests via thin
-`kustomization.yaml` re-exports. Existing CI, GitOps pipelines, and `oc apply -k` invocations do
-not need to change.
+`make help` prints the available targets. `make help <target>` prints a detailed explanation of
+what that target does and what each parameter is used for.
+
+The Makefile auto-detects `PLATFORM`, but you can always override it with
+`PLATFORM=openshift` or `PLATFORM=vanilla`. Platform-specific targets, such as
+`install-systemd-unit`, validate the selected platform before running.
 
 ---
 
