@@ -62,6 +62,13 @@ cleanup_stale_kmm_state() {
         -l "kmm.node.kubernetes.io/module.name=$module_name" \
         --ignore-not-found=true >/dev/null 2>&1 || true
 
+    "${KUBE_CMD}" delete nodemodulesconfig \
+        -l "beta.kmm.node.kubernetes.io/${namespace}.${module_name}.module-configured" \
+        --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+    "${KUBE_CMD}" delete nodemodulesconfig \
+        -l "beta.kmm.node.kubernetes.io/${namespace}.${module_name}.module-in-use" \
+        --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+
     "${KUBE_CMD}" delete builds -n "$namespace" \
         -l "kmm.node.kubernetes.io/module.name=$module_name" \
         --ignore-not-found=true >/dev/null 2>&1 || true
@@ -138,6 +145,7 @@ install_vastnfs() {
 
     if "${KUBE_CMD}" apply -f "$temp_manifest"; then
         rm -f "$temp_manifest"
+        refresh_openshift_kmm_worker_pods "$namespace" "vastnfs-kmm-sa" "vastnfs"
         print_success "VAST NFS KMM installed successfully"
 
         # Apply node selector if specified

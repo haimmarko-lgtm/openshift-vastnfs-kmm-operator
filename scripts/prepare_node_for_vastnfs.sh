@@ -71,6 +71,23 @@ resolve_image_reference() {
     fi
 }
 
+select_vastnfs_image() {
+    local base_image="$1"
+
+    if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]]; then
+        local secure_boot_image="${base_image}-secureboot"
+        local resolved_secure_boot_image
+        resolved_secure_boot_image=$(resolve_image_reference "$secure_boot_image")
+
+        if [[ "$resolved_secure_boot_image" != "$secure_boot_image" ]]; then
+            echo "$secure_boot_image"
+            return
+        fi
+    fi
+
+    echo "$base_image"
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -182,7 +199,7 @@ fi
 
 if [ "$UNLOAD_ONLY" != "1" ] && [ -n "${VASTNFS_VERSION:-}" ] && [ -n "${KMM_IMG_REPO:-}" ]; then
     PRECHECK_KERNEL_VERSION=$(kubectl get node "$NODE_NAME" -o jsonpath='{.status.nodeInfo.kernelVersion}' 2>/dev/null || echo "")
-    PRECHECK_IMAGE="${KMM_IMG_REPO}:${PRECHECK_KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}"
+    PRECHECK_IMAGE=$(select_vastnfs_image "${KMM_IMG_REPO}:${PRECHECK_KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}")
     PRECHECK_RESOLVED_IMAGE=$(resolve_image_reference "$PRECHECK_IMAGE")
 
     if [[ "${PLATFORM}" == "openshift" ]] && [[ "${KUBE_CMD}" == "oc" ]] && [[ "$PRECHECK_RESOLVED_IMAGE" == "$PRECHECK_IMAGE" ]]; then
@@ -582,7 +599,7 @@ if [ -z "$KMM_IMG_REPO" ]; then
     exit 1
 fi
 
-VASTNFS_IMAGE="${KMM_IMG_REPO}:${KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}"
+VASTNFS_IMAGE=$(select_vastnfs_image "${KMM_IMG_REPO}:${KERNEL_VERSION}-vastnfs-${VASTNFS_VERSION}")
 print_info "VAST NFS image: $VASTNFS_IMAGE"
 RESOLVED_VASTNFS_IMAGE=$(resolve_image_reference "$VASTNFS_IMAGE")
 if [[ "$RESOLVED_VASTNFS_IMAGE" != "$VASTNFS_IMAGE" ]]; then

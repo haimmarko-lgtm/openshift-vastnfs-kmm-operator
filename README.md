@@ -50,6 +50,28 @@ make verify
 
 See [docs/openshift.md](docs/openshift.md) for the full guide, secure-boot installations, upgrades, and uninstall.
 
+## Secure Boot In One Command
+
+Use the same resumable target for generated keys, existing keys, MOK staging, and final deployment:
+
+```bash
+# Generate/reuse local keys, create signing secrets, and deploy when nodes trust the cert.
+make install-secure-boot VASTNFS_VERSION=4.5.5
+
+# Use existing enterprise-managed signing material.
+make install-secure-boot \
+  VASTNFS_VERSION=4.5.5 \
+  PRIVATE_KEY_FILE=/secure/vastnfs.priv \
+  PUBLIC_CERT_FILE=/secure/vastnfs.der
+
+# If Secure Boot nodes need MOK enrollment, provide a one-time password file.
+# The command stages enrollment, stops with reboot instructions, and resumes
+# when rerun after MokManager confirmation.
+make install-secure-boot \
+  VASTNFS_VERSION=4.5.5 \
+  MOK_PASSWORD_FILE=/secure/mok-password
+```
+
 ## Quick start — vanilla Kubernetes
 
 ```bash
@@ -87,7 +109,9 @@ Run `make help` to see everything. The targets below are the most common.
 | `make graceful-unload`                 | all                     | Cordon nodes, unmount, stop RPC, unload modules. |
 | `make uninstall` / `make uninstall-all` | all                     | Remove KMM Module + RBAC; `uninstall-all` also deletes the namespace. |
 | `make build-installer`                 | all                     | Render a single `dist/install.yaml` (useful for GitOps). |
-| `make install-secure-boot[-with-keys]` | all                     | Secure Boot signing flow. |
+| `make install-secure-boot`             | all                     | Resumable Secure Boot signing flow; pass key/MOK variables as needed. |
+| `make generate-secure-boot-keys`       | all                     | Optional helper to generate reusable signing keys before install. |
+| `make verify-secure-boot`              | all                     | Verify Secure Boot state and module signatures on all target nodes. |
 | `make build-only` (`FORCE=true`)       | all (vanilla-focused)   | Build images into your registry without deploying any worker pods. |
 | `make reinstall`                       | all                     | Re-apply the Module while VAST NFS is already loaded (skips in-tree removal). |
 | `make prepare-worker NODE=<name>`      | **vanilla only**        | Drain a node, unload in-tree NFS, let KMM load VAST NFS. |
@@ -109,8 +133,8 @@ explicitly if you really need to bypass the guard.
 ├── Makefile                     # Single, platform-aware dispatcher
 ├── scripts/
 │   ├── detect_platform.sh       # openshift|vanilla auto-detection
-│   ├── node_exec.sh             # oc debug vs. kubectl-run + nsenter abstraction
 │   ├── common.sh                # shared helpers (PLATFORM / KUBE_CMD aware)
+│   ├── secure_boot_common.sh    # shared Secure Boot and MOK helpers
 │   ├── install_and_follow_logs.sh
 │   ├── install_with_secure_boot.sh
 │   ├── verify_deployment.sh

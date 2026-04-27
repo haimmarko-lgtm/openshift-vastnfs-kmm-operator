@@ -288,9 +288,9 @@ kubectl logs -n kmm-operator-system -l app.kubernetes.io/component=kmm --tail=20
 ### 5.1 Clone the Repository
 
 ```bash
-# Clone the VAST NFS KMM automation repository
-git clone https://github.com/vast-data/vanila-vastnfs-kmm-operator.git
-cd vanila-vastnfs-kmm-operator
+# Clone the unified VAST NFS KMM automation repository
+git clone https://github.com/vast-data/openshift-vastnfs-kmm-operator.git
+cd openshift-vastnfs-kmm-operator
 
 # View available make targets
 make help
@@ -299,7 +299,7 @@ make help
 ### 5.2 Understand the Directory Structure
 
 ```
-vanila-vastnfs-kmm-operator/
+openshift-vastnfs-kmm-operator/
 ├── Makefile                    # Main automation entry point
 ├── k8s/
 │   ├── base/                   # Base Kustomize configuration
@@ -934,16 +934,16 @@ The `reinstall` target:
 For systems with Secure Boot enabled:
 
 ```bash
-# Option 1: Generate new signing keys and install
+# Generate/reuse signing keys, stage MOK if needed, and deploy once trusted
 make install-secure-boot
 
-# Option 2: Use existing signing keys
-export PRIVATE_KEY_FILE=/path/to/signing.key
-export PUBLIC_CERT_FILE=/path/to/signing.crt
-make install-secure-boot-with-keys
+# Or use existing signing keys with the same target
+make install-secure-boot \
+  PRIVATE_KEY_FILE=/path/to/signing.key \
+  PUBLIC_CERT_FILE=/path/to/signing.der
 ```
 
-> **Note:** Secure boot installations require keys to be enrolled in the MOK (Machine Owner Key) database.
+> **Note:** Secure boot installations require the public signing cert to be enrolled in the MOK (Machine Owner Key) database. If enrollment is missing, rerun with `MOK_PASSWORD_FILE=/secure/mok-password`; the command stages the cert and exits with reboot instructions.
 
 ---
 
@@ -1271,10 +1271,9 @@ make uninstall
 
 | Target | Description |
 |--------|-------------|
-| `make install-secure-boot` | Install with secure boot (auto-generates keys) |
-| `make install-secure-boot-with-keys` | Install with existing secure boot keys |
-| `make generate-secure-boot-keys` | Generate secure boot signing keys |
-| `make verify-secure-boot` | Verify secure boot deployment |
+| `make install-secure-boot` | Resumable Secure Boot install, key handling, MOK staging, and signed deployment |
+| `make generate-secure-boot-keys` | Optional helper to generate secure boot signing keys |
+| `make verify-secure-boot` | Verify Secure Boot state and module signatures on all target nodes |
 
 #### Utilities
 

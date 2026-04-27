@@ -83,8 +83,13 @@ for mod in sunrpc rpcrdma compat_nfs_ssc lockd nfs_acl auth_rpcgss nfs nfsv3 nfs
     if [ -d /sys/module/\${mod} ]; then
         refcnt=\$(cat /sys/module/\${mod}/refcnt 2>/dev/null || echo "0")
         holders=\$(ls /sys/module/\${mod}/holders 2>/dev/null | tr "\\n" " " || echo "none")
-        echo "  \${mod}: refcnt=\${refcnt} holders=[\${holders}]"
-        if [ "\$refcnt" != "0" ]; then
+        holder_count=\$(find /sys/module/\${mod}/holders -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d " ")
+        external_refs=\$((refcnt - holder_count))
+        if [ "\$external_refs" -lt 0 ]; then
+            external_refs=0
+        fi
+        echo "  \${mod}: refcnt=\${refcnt} holders=[\${holders}] external_refs=\${external_refs}"
+        if [ "\$external_refs" != "0" ]; then
             modules_in_use=true
         fi
     fi
@@ -186,8 +191,9 @@ EOF
 # ---- Run script on a node (platform-aware) --------------------------------
 _run_on_node_openshift() {
     local node="$1" script_body="$2"
-    # Pipe the script body as bash stdin via chroot.
-    oc debug "node/${node}" -- chroot /host bash -s <<< "${script_body}" 2>&1 | sed 's/^/  /'
+    # Pass the generated script as the command argument. Some oc versions do
+    # not support stdin for `oc debug`, so avoid relying on `bash -s`.
+    oc debug "node/${node}" -- chroot /host bash -c "${script_body}" 2>&1 | sed 's/^/  /'
 }
 
 _run_on_node_vanilla() {

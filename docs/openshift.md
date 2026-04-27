@@ -118,22 +118,27 @@ make verify
 
 ### 2. Secure Boot Installation
 
-**Generate keys and install (includes log monitoring):**
-```bash
-make install-secure-boot
+`make install-secure-boot` is the only Secure Boot deployment entry point. It is resumable:
+it prepares signing material, creates signing secrets, stages MOK enrollment if node trust is
+missing, stops before deployment when a reboot is required, and continues when rerun after
+MokManager confirmation.
 
-# Wait 2-3 minutes for secure boot signing and DaemonSet deployment, then verify
-make verify
+**Generated or reused local keys:**
+```bash
+make install-secure-boot VASTNFS_VERSION=4.5.5
+
+# If the command reports pending MOK enrollment, reboot each listed node,
+# confirm enrollment in the VMware/BMC console, then rerun the same command.
 ```
 
-**Using existing keys (includes log monitoring):**
+**Existing enterprise-managed keys:**
 ```bash
-export PRIVATE_KEY_FILE=/path/to/private.key
-export PUBLIC_CERT_FILE=/path/to/public.crt
-make install-secure-boot-with-keys
+make install-secure-boot \
+  VASTNFS_VERSION=4.5.5 \
+  PRIVATE_KEY_FILE=/path/to/private.key \
+  PUBLIC_CERT_FILE=/path/to/public.der
 
-# Wait 2-3 minutes for secure boot signing and DaemonSet deployment, then verify
-make verify
+# Add MOK_PASSWORD_FILE=/secure/mok-password when the cert must be staged for enrollment.
 ```
 
 
@@ -229,8 +234,9 @@ No manual steps required!
 | Target | Description |
 |--------|-------------|
 | `make install` | Install or upgrade VAST NFS (auto-detects and handles graceful unload) |
-| `make install-secure-boot` | Secure boot installation with real-time log monitoring |
-| `make install-secure-boot-with-keys` | Secure boot with existing keys and real-time log monitoring |
+| `make install-secure-boot` | Resumable Secure Boot installation, key handling, MOK staging, and signed deployment |
+| `make generate-secure-boot-keys` | Optional helper to generate reusable Secure Boot signing keys |
+| `make verify-secure-boot` | Verify Secure Boot state and module signatures on all target nodes |
 | `make uninstall` | Complete removal (automatically performs graceful unload first) |
 | `make verify` | Deployment verification |
 | `make build-installer` | Generate consolidated manifest in `dist/install.yaml` |
@@ -393,24 +399,45 @@ make install
 
 ## Secure Boot Support
 
-### Key Generation
-```bash
-# Generate new signing keys
-make generate-secure-boot-keys
+### One Resumable Secure Boot Flow
 
-# Keys will be created in: secure-boot-keys/
+The Secure Boot flow uses one target:
+
+```bash
+make install-secure-boot VASTNFS_VERSION=4.5.5
 ```
 
-### Installation with Secure Boot
-```bash
-# Method 1: Auto-generate keys (includes log monitoring)
-make install-secure-boot
+When no key variables are provided, the target reuses or generates:
 
-# Method 2: Use existing keys (includes log monitoring)
-export PRIVATE_KEY_FILE=/path/to/signing.key
-export PUBLIC_CERT_FILE=/path/to/signing.crt
-make install-secure-boot-with-keys
+```text
+keys/vastnfs_signing_key.priv
+keys/vastnfs_signing_key.der
 ```
+
+To use existing signing material, pass both files to the same target:
+
+```bash
+make install-secure-boot \
+  VASTNFS_VERSION=4.5.5 \
+  PRIVATE_KEY_FILE=/path/to/signing.key \
+  PUBLIC_CERT_FILE=/path/to/signing.der
+```
+
+If Secure Boot is enabled and the public cert is not enrolled on a node, provide a one-time MOK password file:
+
+```bash
+make install-secure-boot \
+  VASTNFS_VERSION=4.5.5 \
+  MOK_PASSWORD_FILE=/secure/mok-password
+```
+
+The command stages the cert with `mokutil`, verifies it appears in `mokutil --list-new`, and exits before applying the KMM Module. Reboot each listed node, open the VMware/BMC console, and complete:
+
+```text
+Enroll MOK -> Continue -> Yes -> enter the one-time password -> Reboot
+```
+
+Then rerun the same `make install-secure-boot ...` command. Once the cert is enrolled, the target applies the signed KMM Module.
 
 ### Verification
 ```bash
@@ -420,3 +447,10 @@ make verify-secure-boot
 # Or use regular verification
 make verify
 ```
+
+### Secure Boot Troubleshooting
+
+- `Key was rejected by service`: the module was signed, but the node does not trust the signing cert. Rerun `make install-secure-boot ... MOK_PASSWORD_FILE=/secure/mok-password`, reboot, and complete MokManager enrollment.
+- No MokManager screen appears: confirm the key is pending with `oc debug node/<node> -- chroot /host mokutil --list-new`; if it is empty, rerun `make install-secure-boot` with `MOK_PASSWORD_FILE`.
+- Cert is pending but not enrolled: boot through the VMware/BMC console and watch for the MokManager prompt; select `Enroll MOK -> Continue -> Yes`, enter the one-time password, then reboot.
+- Wrong signing path: check KMM build/sign logs for missing `filesToSign` entries. OpenShift signs the nested bundle layout under `/opt/lib/modules/${KERNEL_FULL_VERSION}/extra/`.

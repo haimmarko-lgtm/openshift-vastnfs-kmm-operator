@@ -158,19 +158,19 @@ OpenShift can run with **Secure Boot** enabled, which means:
 The repository handles this with:
 
 ```bash
-# Option 1: Auto-generate signing keys
+# Auto-generate/reuse signing keys
 make install-secure-boot
 
-# Option 2: Use your organization's existing keys
-export PRIVATE_KEY_FILE=/path/to/private.key
-export PUBLIC_CERT_FILE=/path/to/public.crt
-make install-secure-boot-with-keys
+# Or use your organization's existing keys with the same target
+make install-secure-boot \
+  PRIVATE_KEY_FILE=/path/to/private.key \
+  PUBLIC_CERT_FILE=/path/to/public.der
 ```
 
 KMM will then:
 1. Build the module
 2. Sign it with the provided keys
-3. Enroll the certificate in the node's MOK (Machine Owner Key) database
+3. Require the certificate to be enrolled in the node's MOK (Machine Owner Key) database
 4. Load the signed module
 
 ---

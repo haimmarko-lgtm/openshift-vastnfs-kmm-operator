@@ -66,6 +66,7 @@ KMM_PULL_SECRET ?=
 # NODE_SELECTOR: optional Module.spec.selector patch, e.g. "vastnfs-kmm/enabled=true"
 NODE_SELECTOR ?=
 SECURE_BOOT_KUSTOMIZE_DIR ?= k8s/overlays/$(PLATFORM)/secure-boot
+SECURE_BOOT_KMM_IMG_TAG ?= $(KMM_IMG_TAG)-secureboot
 
 ######################
 # BUILD IMAGE AUTO-DETECT (vanilla only)
@@ -417,10 +418,17 @@ delete-module: ## Delete the Module and all worker pods (keeps built images)
 ######################
 # UNINSTALL
 ######################
-uninstall: graceful-unload ## Remove VAST NFS KMM from the cluster (handles finalizers)
+cleanup-node-driver: ## Remove VAST NFS driver artifacts from all nodes
+	@NAMESPACE=$(NAMESPACE) KUBE_CMD=$(KUBE_CMD) PLATFORM=$(PLATFORM) VASTNFS_HELPER_IMAGE=$(HELPER_IMAGE) \
+		./scripts/cleanup_node_driver.sh
+
+uninstall: graceful-unload ## Remove VAST NFS KMM resources from the cluster (handles finalizers)
 	@echo "Uninstalling VAST NFS KMM from namespace $(NAMESPACE)..."
 	@echo ""
-	@echo "[1/7] Cleaning up build pods..."
+	@echo "[1/9] Removing VAST NFS driver artifacts from nodes..."
+	@$(MAKE) cleanup-node-driver
+	@echo ""
+	@echo "[2/9] Cleaning up build pods..."
 ifeq ($(PLATFORM),openshift)
 	@$(KUBE_CMD) get builds -n $(NAMESPACE) -o name 2>/dev/null | xargs -r -I {} $(KUBE_CMD) patch {} -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
 	@$(KUBE_CMD) get builds -n $(NAMESPACE) -o name 2>/dev/null | xargs -r $(KUBE_CMD) delete --force --grace-period=0 -n $(NAMESPACE) 2>/dev/null || true
@@ -428,42 +436,63 @@ ifeq ($(PLATFORM),openshift)
 endif
 	@$(KUBE_CMD) delete pods -l kmm.node.kubernetes.io/module.name=vastnfs -n $(NAMESPACE) --force --grace-period=0 2>/dev/null || true
 	@echo ""
-	@echo "[2/7] Deleting Module (force removing finalizers first)..."
+	@echo "[3/9] Deleting Module (force removing finalizers before/after delete)..."
 	@$(KUBE_CMD) patch module vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-	@$(KUBE_CMD) delete module vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 2>/dev/null || true
-	@$(KUBE_CMD) wait --for=delete module/vastnfs -n $(NAMESPACE) --timeout=30s 2>/dev/null || true
+	@$(KUBE_CMD) delete module vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 --wait=false 2>/dev/null || true
+	@for attempt in 1 2 3 4 5 6; do \
+		if ! $(KUBE_CMD) get module vastnfs -n $(NAMESPACE) >/dev/null 2>&1; then break; fi; \
+		$(KUBE_CMD) patch module vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+		$(KUBE_CMD) wait --for=delete module/vastnfs -n $(NAMESPACE) --timeout=5s >/dev/null 2>&1 && break; \
+	done
 	@echo ""
-	@echo "[3/7] Deleting ModuleImagesConfig (force removing finalizers first)..."
+	@echo "[4/9] Deleting ModuleImagesConfig (force removing finalizers before/after delete)..."
 	@$(KUBE_CMD) patch moduleimagesconfig vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-	@$(KUBE_CMD) delete moduleimagesconfig vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 2>/dev/null || true
+	@$(KUBE_CMD) delete moduleimagesconfig vastnfs -n $(NAMESPACE) --ignore-not-found --force --grace-period=0 --wait=false 2>/dev/null || true
+	@for attempt in 1 2 3 4 5 6; do \
+		if ! $(KUBE_CMD) get moduleimagesconfig vastnfs -n $(NAMESPACE) >/dev/null 2>&1; then break; fi; \
+		$(KUBE_CMD) patch moduleimagesconfig vastnfs -n $(NAMESPACE) -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+		$(KUBE_CMD) wait --for=delete moduleimagesconfig/vastnfs -n $(NAMESPACE) --timeout=5s >/dev/null 2>&1 && break; \
+	done
 	@echo ""
-	@echo "[4/7] Cleaning up any remaining KMM-managed pods..."
+	@echo "[5/9] Cleaning up any remaining KMM-managed pods..."
 	@$(KUBE_CMD) delete pods -n $(NAMESPACE) -l kmm.node.kubernetes.io/module.name=vastnfs --force --grace-period=0 2>/dev/null || true
 	@$(KUBE_CMD) delete pods -n $(NAMESPACE) -l kmm.node.kubernetes.io/resource-type=BuildImage --force --grace-period=0 2>/dev/null || true
 	@echo ""
-	@echo "[5/7] Deleting ConfigMaps..."
+	@echo "[6/9] Deleting ConfigMaps..."
 	@$(KUBE_CMD) delete configmap vastnfs-kmm-build-dockerfile -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete configmap -l app.kubernetes.io/name=vastnfs-kmm -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@echo ""
-	@echo "[6/7] Deleting ServiceAccount and RBAC resources..."
+	@echo "[7/9] Deleting ServiceAccount and RBAC resources..."
 	@$(KUBE_CMD) delete serviceaccount vastnfs-kmm-sa -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete serviceaccount -l app.kubernetes.io/name=vastnfs-kmm -n $(NAMESPACE) --ignore-not-found 2>/dev/null || true
 	@$(KUBE_CMD) delete clusterrole,clusterrolebinding -l app.kubernetes.io/name=vastnfs-kmm 2>/dev/null || true
 ifeq ($(PLATFORM),openshift)
 	@echo ""
-	@echo "[6b/7] Cleaning up ImageStream..."
+	@echo "[7b/9] Cleaning up ImageStream..."
 	@$(KUBE_CMD) delete imagestream vastnfs -n $(NAMESPACE) 2>/dev/null || true
 endif
 	@echo ""
-	@echo "[7/7] Removing node labels..."
+	@echo "[8/9] Removing remaining namespaced resources..."
+	@if $(KUBE_CMD) get namespace $(NAMESPACE) >/dev/null 2>&1; then \
+		for resource in $$($(KUBE_CMD) api-resources --namespaced=true --verbs=list,delete -o name 2>/dev/null | sort -u); do \
+			case "$$resource" in \
+				events|events.events.k8s.io|pods/log|pods/status|*/status|*/scale|bindings|localsubjectaccessreviews.authorization.k8s.io) continue ;; \
+			esac; \
+			names=$$($(KUBE_CMD) get "$$resource" -n $(NAMESPACE) -o name 2>/dev/null || true); \
+			if [ -n "$$names" ]; then \
+				echo "$$names" | xargs -r $(KUBE_CMD) delete -n $(NAMESPACE) --ignore-not-found --wait=false 2>/dev/null || true; \
+			fi; \
+		done; \
+	fi
+	@echo ""
+	@echo "[9/9] Removing node labels..."
 	@for node in $$($(KUBE_CMD) get nodes -l vastnfs.vast.com/deploy=true -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do \
 		echo "  Removing label from node: $$node"; \
 		$(KUBE_CMD) label node "$$node" vastnfs.vast.com/deploy- 2>/dev/null || true; \
 	done
 	@echo ""
 	@echo "=== Uninstall Complete ==="
-	@echo "Note: Namespace $(NAMESPACE) was NOT deleted (may contain other resources)."
-	@echo "To delete the namespace: $(KUBE_CMD) delete namespace $(NAMESPACE)"
+	@echo "Namespace $(NAMESPACE) was left in place. Use 'make uninstall-all' to delete it too."
 
 uninstall-all: uninstall ## Remove VAST NFS KMM including the namespace
 	@echo ""
@@ -477,30 +506,24 @@ uninstall-all: uninstall ## Remove VAST NFS KMM including the namespace
 install-secure-boot: kustomize ## Install VAST NFS KMM with secure boot support
 	@$(call check_required_env,$(REQ_INSTALL_ENV))
 	@export VASTNFS_VERSION="$(VASTNFS_VERSION)"; \
-	export KMM_IMG="$(KMM_IMG_REPO):$(KMM_IMG_TAG)"; \
+	export KMM_IMG="$(KMM_IMG_REPO):$(SECURE_BOOT_KMM_IMG_TAG)"; \
 	export NAMESPACE="$(NAMESPACE)"; \
 	export KMM_PULL_SECRET="$(KMM_PULL_SECRET)"; \
 	export BUILD_IMAGE="$(BUILD_IMAGE)"; \
 	export KUSTOMIZE_DIR="$(SECURE_BOOT_KUSTOMIZE_DIR)"; \
+	export NODE_SELECTOR="$(NODE_SELECTOR)"; \
+	export PRIVATE_KEY_FILE="$(PRIVATE_KEY_FILE)"; \
+	export PUBLIC_CERT_FILE="$(PUBLIC_CERT_FILE)"; \
+	export MOK_PASSWORD="$(MOK_PASSWORD)"; \
+	export MOK_PASSWORD_FILE="$(MOK_PASSWORD_FILE)"; \
+	export MOK_PROMPT_TIMEOUT="$(MOK_PROMPT_TIMEOUT)"; \
+	export KEYS_DIR="$(KEYS_DIR)"; \
+	export KEY_NAME="$(KEY_NAME)"; \
+	export HELPER_IMAGE="$(HELPER_IMAGE)"; \
 	export KUSTOMIZE="$(KUSTOMIZE)"; \
 	export PLATFORM="$(PLATFORM)"; \
 	export KUBE_CMD="$(KUBE_CMD)"; \
 	./scripts/install_with_secure_boot.sh --follow-logs
-
-install-secure-boot-with-keys: kustomize ## Install with existing secure boot keys
-	@$(call check_required_env,PRIVATE_KEY_FILE PUBLIC_CERT_FILE $(REQ_INSTALL_ENV))
-	@export VASTNFS_VERSION="$(VASTNFS_VERSION)"; \
-	export KMM_IMG="$(KMM_IMG_REPO):$(KMM_IMG_TAG)"; \
-	export NAMESPACE="$(NAMESPACE)"; \
-	export KMM_PULL_SECRET="$(KMM_PULL_SECRET)"; \
-	export BUILD_IMAGE="$(BUILD_IMAGE)"; \
-	export KUSTOMIZE_DIR="$(SECURE_BOOT_KUSTOMIZE_DIR)"; \
-	export PRIVATE_KEY_FILE="$(PRIVATE_KEY_FILE)"; \
-	export PUBLIC_CERT_FILE="$(PUBLIC_CERT_FILE)"; \
-	export KUSTOMIZE="$(KUSTOMIZE)"; \
-	export PLATFORM="$(PLATFORM)"; \
-	export KUBE_CMD="$(KUBE_CMD)"; \
-	./scripts/install_with_secure_boot.sh --keys "$(PRIVATE_KEY_FILE)" "$(PUBLIC_CERT_FILE)" --follow-logs
 
 generate-secure-boot-keys: ## Generate secure boot keys for kernel module signing
 	@./scripts/generate_secure_boot_keys.sh
@@ -512,18 +535,24 @@ verify-secure-boot: ## Verify secure boot deployment (platform-aware)
 	@echo ""
 	@echo "2. Checking for signed modules on nodes..."
 ifeq ($(PLATFORM),openshift)
-	@for node in $$($(KUBE_CMD) get nodes -o jsonpath='{.items[0].metadata.name}'); do \
+	@nodes="$$($(KUBE_CMD) get nodes -l "$(NODE_SELECTOR)" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; \
+	if [ -z "$$nodes" ]; then nodes="$$($(KUBE_CMD) get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; fi; \
+	if [ -z "$$nodes" ]; then nodes="$$($(KUBE_CMD) get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; fi; \
+	for node in $$nodes; do \
 		echo "--- Checking $$node ---"; \
 		echo "VAST NFS Status:"; \
-		oc debug node/$$node -- chroot /host cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null && echo " (VAST NFS ACTIVE)" || echo "VAST NFS not active"; \
+		$(KUBE_CMD) debug node/$$node -- chroot /host cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null && echo " (VAST NFS ACTIVE)" || echo "VAST NFS not active"; \
 		echo "Module signature:"; \
-		oc debug node/$$node -- chroot /host modinfo sunrpc | grep signature 2>/dev/null || echo "No signature found"; \
+		$(KUBE_CMD) debug node/$$node -- chroot /host modinfo sunrpc | grep signature 2>/dev/null || echo "No signature found"; \
 		echo "Secure boot status:"; \
-		oc debug node/$$node -- chroot /host mokutil --sb-state 2>/dev/null || echo "mokutil not available"; \
+		$(KUBE_CMD) debug node/$$node -- chroot /host mokutil --sb-state 2>/dev/null || echo "mokutil not available"; \
 		echo ""; \
 	done
 else
-	@for node in $$($(KUBE_CMD) get nodes -o jsonpath='{.items[0].metadata.name}'); do \
+	@nodes="$$($(KUBE_CMD) get nodes -l "$(NODE_SELECTOR)" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; \
+	if [ -z "$$nodes" ]; then nodes="$$($(KUBE_CMD) get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; fi; \
+	if [ -z "$$nodes" ]; then nodes="$$($(KUBE_CMD) get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; fi; \
+	for node in $$nodes; do \
 		echo "--- Checking $$node ---"; \
 		echo "VAST NFS Status:"; \
 		$(KUBE_CMD) run "sb-ver-$$node-$$$$" --rm -i --restart=Never --image=busybox \
@@ -552,6 +581,11 @@ clean-debug-pods: ## Clean up leftover kubectl/oc debug pods
 	@echo "Cleaning up debug pods created by vastnfs-kmm scripts..."
 	@echo "Looking for node-debugger pods..."
 	@$(KUBE_CMD) get pods -A --no-headers 2>/dev/null | grep "node-debugger" | while read ns pod rest; do \
+		echo "  Deleting $$ns/$$pod"; \
+		$(KUBE_CMD) delete pod "$$pod" -n "$$ns" --ignore-not-found --force --grace-period=0 2>/dev/null || true; \
+	done || true
+	@echo "Looking for OpenShift node debug pods..."
+	@$(KUBE_CMD) get pods -A --no-headers 2>/dev/null | grep -E "^[^[:space:]]+[[:space:]]+[^[:space:]]+-debug-[[:alnum:]]+" | while read ns pod rest; do \
 		echo "  Deleting $$ns/$$pod"; \
 		$(KUBE_CMD) delete pod "$$pod" -n "$$ns" --ignore-not-found --force --grace-period=0 2>/dev/null || true; \
 	done || true

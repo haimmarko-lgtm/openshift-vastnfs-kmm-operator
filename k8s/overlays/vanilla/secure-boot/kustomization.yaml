@@ -51,17 +51,18 @@ patches:
           certSecret:
             name: ${SIGNING_CERT_SECRET}
           filesToSign:
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/net/sunrpc/sunrpc.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/net/sunrpc/xprtrdma/rpcrdma.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/net/sunrpc/auth_gss/auth_rpcgss.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/net/sunrpc/auth_gss/rpcsec_gss_krb5.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/lockd/lockd.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs_common/nfs_acl.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs_common/compat_nfs_ssc.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/nfs.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/nfsv3.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/nfsv4.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/blocklayout/blocklayoutdriver.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/filelayout/nfs_layout_nfsv41_files.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfs/flexfilelayout/nfs_layout_flexfiles.ko
-            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/fs/nfsd/nfsd.ko
+            # Vanilla builds copy package modules into a flat /extra directory.
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/sunrpc.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/rpcrdma.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/auth_rpcgss.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/rpcsec_gss_krb5.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/lockd.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfs_acl.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/compat_nfs_ssc.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfs.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfsv3.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfsv4.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/blocklayoutdriver.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfs_layout_nfsv41_files.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfs_layout_flexfiles.ko
+            - /opt/lib/modules/${KERNEL_FULL_VERSION}/extra/nfsd.ko

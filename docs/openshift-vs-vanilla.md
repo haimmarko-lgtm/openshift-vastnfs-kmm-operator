@@ -1,11 +1,10 @@
 # OpenShift vs Vanilla Kubernetes: VAST NFS KMM Operator Comparison
 
-This document compares two implementations of the VAST NFS KMM (Kernel Module Management) operator:
+This document compares the OpenShift and vanilla Kubernetes modes in the unified
+[vast-data/openshift-vastnfs-kmm-operator](https://github.com/vast-data/openshift-vastnfs-kmm-operator)
+repository.
 
-1. **OpenShift VAST NFS KMM Operator** - [vast-data/openshift-vastnfs-kmm-operator](https://github.com/vast-data/openshift-vastnfs-kmm-operator)
-2. **Vanilla Kubernetes VAST NFS KMM Operator** - [vanila-vastnfs-kmm-operator](https://git.vastdata.com/haim.marko/vanila-vastnfs-kmm-operator)
-
-Both tools deploy VAST NFS kernel modules using KMM, but they target different Kubernetes distributions and have different architectural approaches.
+Both modes deploy VAST NFS kernel modules using KMM, but they target different Kubernetes distributions and have different architectural approaches.
 
 ## Quick Comparison Table
 

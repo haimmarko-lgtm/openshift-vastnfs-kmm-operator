@@ -113,8 +113,8 @@ For more details, see [KMM Installation Guide](https://kmm.sigs.k8s.io/documenta
 
 ```bash
 # Clone the repository
-git clone https://github.com/vast-data/vanila-vastnfs-kmm-operator
-cd vanila-vastnfs-kmm-operator
+git clone https://github.com/vast-data/openshift-vastnfs-kmm-operator
+cd openshift-vastnfs-kmm-operator
 
 # Set required environment variables
 export VASTNFS_VERSION=4.5.5
@@ -194,22 +194,25 @@ make verify
 
 ### 4. Secure Boot Installation
 
-**Generate keys and install (includes log monitoring):**
-```bash
-make install-secure-boot
+`make install-secure-boot` is the single Secure Boot entry point. Vanilla still requires
+`VASTNFS_VERSION` and `KMM_IMG_REPO`.
 
-# Wait 2-3 minutes for secure boot signing and DaemonSet deployment, then verify
-make verify
+**Generated or reused local keys:**
+```bash
+export VASTNFS_VERSION=4.5.5
+export KMM_IMG_REPO=myregistry:5000/vastnfs
+
+make install-secure-boot
 ```
 
-**Using existing keys (includes log monitoring):**
+**Existing enterprise-managed keys:**
 ```bash
-export PRIVATE_KEY_FILE=/path/to/private.key
-export PUBLIC_CERT_FILE=/path/to/public.crt
-make install-secure-boot-with-keys
+export VASTNFS_VERSION=4.5.5
+export KMM_IMG_REPO=myregistry:5000/vastnfs
 
-# Wait 2-3 minutes for secure boot signing and DaemonSet deployment, then verify
-make verify
+make install-secure-boot \
+  PRIVATE_KEY_FILE=/path/to/private.key \
+  PUBLIC_CERT_FILE=/path/to/public.der
 ```
 
 ### 5. Custom Build Image
@@ -342,10 +345,9 @@ No manual steps required!
 
 | Target | Description |
 |--------|-------------|
-| `make install-secure-boot` | Secure boot installation with auto-generated keys |
-| `make install-secure-boot-with-keys` | Secure boot with existing keys |
-| `make generate-secure-boot-keys` | Generate secure boot signing keys |
-| `make verify-secure-boot` | Verify secure boot deployment |
+| `make install-secure-boot` | Resumable Secure Boot installation, key handling, MOK staging, and signed deployment |
+| `make generate-secure-boot-keys` | Optional helper to generate secure boot signing keys |
+| `make verify-secure-boot` | Verify Secure Boot state and module signatures on all target nodes |
 
 #### Utilities
 
@@ -636,24 +638,39 @@ make build-only
 
 ## Secure Boot Support
 
-### Key Generation
-```bash
-# Generate new signing keys
-make generate-secure-boot-keys
+### One Resumable Secure Boot Flow
 
-# Keys will be created in: secure-boot-keys/
-```
+Vanilla secure boot uses the same target as OpenShift, with vanilla's required registry variables:
 
-### Installation with Secure Boot
 ```bash
-# Method 1: Auto-generate keys (includes log monitoring)
+export VASTNFS_VERSION=4.5.5
+export KMM_IMG_REPO=myregistry:5000/vastnfs
+
 make install-secure-boot
-
-# Method 2: Use existing keys (includes log monitoring)
-export PRIVATE_KEY_FILE=/path/to/signing.key
-export PUBLIC_CERT_FILE=/path/to/signing.crt
-make install-secure-boot-with-keys
 ```
+
+When no key files are provided, the target reuses or generates:
+
+```text
+keys/vastnfs_signing_key.priv
+keys/vastnfs_signing_key.der
+```
+
+Use existing signing material by passing both files:
+
+```bash
+make install-secure-boot \
+  PRIVATE_KEY_FILE=/path/to/signing.key \
+  PUBLIC_CERT_FILE=/path/to/signing.der
+```
+
+If Secure Boot nodes do not trust the cert yet, provide a one-time MOK password file:
+
+```bash
+make install-secure-boot MOK_PASSWORD_FILE=/secure/mok-password
+```
+
+The command stages the cert, verifies `mokutil --list-new`, and exits before deploying. Reboot each listed node, complete MokManager enrollment, then rerun the same `make install-secure-boot` command.
 
 ### Verification
 ```bash
@@ -663,6 +680,13 @@ make verify-secure-boot
 # Or use regular verification
 make verify
 ```
+
+### Secure Boot Troubleshooting
+
+- `Key was rejected by service`: the module was signed, but the node does not trust the signing cert. Rerun `make install-secure-boot MOK_PASSWORD_FILE=/secure/mok-password`, reboot, and complete MokManager enrollment.
+- `mokutil --list-new` is empty: no enrollment is pending. Rerun `make install-secure-boot` with `MOK_PASSWORD_FILE` or `MOK_PASSWORD`.
+- Cert is pending but no prompt appears: use the VM/BMC console during boot and watch for the MokManager prompt; increase `MOK_PROMPT_TIMEOUT` if needed.
+- Wrong signing path: check KMM signing logs for missing `filesToSign` entries. Vanilla signs the flat `/opt/lib/modules/${KERNEL_FULL_VERSION}/extra/*.ko` layout.
 
 ## Documentation
 

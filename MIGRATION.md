@@ -5,8 +5,9 @@ This repository is the merged successor of two previous repos:
 - `openshift-vastnfs-kmm-operator` — the OpenShift-specific operator (this repo's history).
 - `vanila-vastnfs-kmm-operator` — the multi-distro vanilla Kubernetes fork.
 
-Whichever one you came from, **your existing commands keep working** — the consolidation was
-designed to be 100% backward-compatible at the target/env-var level. This guide explains what
+Whichever one you came from, the core install, verify, and uninstall flows keep the same shape.
+Secure Boot now uses a single `make install-secure-boot` entry point with variables for existing
+keys and MOK enrollment. This guide explains what
 changed under the hood, when you might want to opt into the new layout, and how to run
 `make migrate-from-legacy` to bring an older install in line with the unified manifest layout.
 

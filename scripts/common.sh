@@ -215,6 +215,55 @@ check_secret_exists() {
     "${KUBE_CMD}" get secret "$secret_name" -n "$namespace" >/dev/null 2>&1
 }
 
+wait_for_openshift_service_account_pull_secret() {
+    local namespace="$1"
+    local service_account="$2"
+    local timeout="${3:-60}"
+    local elapsed=0
+    local pull_secret=""
+
+    if [[ "${PLATFORM}" != "openshift" ]]; then
+        return 0
+    fi
+
+    print_step "Waiting for OpenShift service account pull secret..."
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        pull_secret=$("${KUBE_CMD}" get serviceaccount "$service_account" -n "$namespace" \
+            -o jsonpath='{.imagePullSecrets[0].name}' 2>/dev/null || true)
+
+        if [ -n "$pull_secret" ] && "${KUBE_CMD}" get secret "$pull_secret" -n "$namespace" >/dev/null 2>&1; then
+            print_success "ServiceAccount $service_account has pull secret $pull_secret"
+            return 0
+        fi
+
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    print_warning "Timed out waiting for pull secret on ServiceAccount $service_account"
+    return 1
+}
+
+refresh_openshift_kmm_worker_pods() {
+    local namespace="$1"
+    local service_account="$2"
+    local module_name="${3:-vastnfs}"
+
+    if [[ "${PLATFORM}" != "openshift" ]]; then
+        return 0
+    fi
+
+    if ! wait_for_openshift_service_account_pull_secret "$namespace" "$service_account"; then
+        return 0
+    fi
+
+    print_step "Refreshing KMM worker pods to pick up current pull secret..."
+    "${KUBE_CMD}" delete pods -n "$namespace" \
+        -l "app.kubernetes.io/component=worker,kmm.node.kubernetes.io/module.name=$module_name" \
+        --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+}
+
 create_secret_from_file() {
     local secret_name="$1"
     local namespace="$2"
