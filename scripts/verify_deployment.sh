@@ -145,17 +145,37 @@ is_kmm_enabled() {
     return 1
 }
 
+get_module_label_selector() {
+    local selector
+    selector=$("${KUBE_CMD}" get module "$MODULE_NAME" -n "$NAMESPACE" \
+        -o go-template='{{range $k,$v := .spec.selector}}{{printf "%s=%s," $k $v}}{{end}}' 2>/dev/null || echo "")
+    echo "${selector%,}"
+}
+
 get_kmm_status() {
     local node="$1"
     local role="$2"
+    local selector
+
+    selector=$(get_module_label_selector)
+    if [[ -z "$selector" ]]; then
+        echo "Managed"
+        return
+    fi
 
     if [[ "$role" == "control-plane" ]] && is_control_plane_only "$node"; then
         echo "N/A"
         return
     fi
 
-    # On OpenShift without explicit opt-in labelling, the module targets all
-    # worker nodes by default, so treat an absent label as "Managed".
+    if "${KUBE_CMD}" get node "$node" -l "$selector" --ignore-not-found \
+        -o jsonpath='{.metadata.name}' 2>/dev/null | grep -qx "$node"; then
+        echo "Managed"
+        return
+    fi
+
+    # OpenShift deployments often rely on platform defaults rather than the
+    # vanilla opt-in label, so keep absent labels from looking like a skip.
     if [[ "${PLATFORM:-}" == "openshift" ]]; then
         echo "Managed"
         return

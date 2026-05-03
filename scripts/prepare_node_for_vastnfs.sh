@@ -630,18 +630,27 @@ KVER="'"$KERNEL_VERSION"'"
 MODULE_ROOT=/tmp/vastnfs-opt
 MODULE_DIR=$MODULE_ROOT/lib/modules/$KVER/extra
 
+is_vastnfs_stack_loaded() {
+    cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q vastdata &&
+        cat /proc/modules | grep -q "^nfs "
+}
+
 echo "=== Host OS Information ==="
 cat /etc/os-release 2>/dev/null | head -5 || echo "Unknown OS"
 echo "Kernel: $(uname -r)"
 echo ""
 
 # Check if VAST NFS is already loaded with correct version
-if cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q "vastdata.*'"$VASTNFS_VERSION"'"; then
+if cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q "vastdata.*'"$VASTNFS_VERSION"'" && \
+   cat /proc/modules | grep -q "^nfs "; then
     echo "=========================================="
     echo "VAST NFS '"$VASTNFS_VERSION"' is already loaded!"
     echo "=========================================="
     cat /sys/module/sunrpc/parameters/nfs_bundle_version
     exit 0
+elif cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q "vastdata.*'"$VASTNFS_VERSION"'"; then
+    echo "VAST NFS sunrpc is loaded, but nfs client module is not loaded yet."
+    echo "Continuing with preparation."
 fi
 
 echo "=== Step 1: Verifying VAST NFS modules are in place ==="
@@ -680,40 +689,59 @@ echo ""
 if [ "$VASTNFS_CTL_AVAILABLE" = "1" ] && /usr/local/bin/vastnfs-ctl reload; then
     echo ""
     echo "=========================================="
-    echo "SUCCESS: vastnfs-ctl reload completed!"
+    echo "vastnfs-ctl reload completed"
     echo "=========================================="
     echo ""
     echo "=== VAST NFS Version ==="
-    cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null || echo "Could not read version"
+    VASTNFS_LOADED_VERSION=$(cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null || true)
+    if [ -n "$VASTNFS_LOADED_VERSION" ]; then
+        echo "$VASTNFS_LOADED_VERSION"
+    else
+        echo "Could not read version"
+    fi
     echo ""
     echo "=== vastnfs-ctl status ==="
     /usr/local/bin/vastnfs-ctl status 2>/dev/null || true
+
+    if is_vastnfs_stack_loaded; then
+        echo ""
+        echo "=========================================="
+        echo "SUCCESS: VAST NFS is loaded!"
+        echo "=========================================="
     
-    # Start required NFS userspace services (rpc.statd for locking)
-    echo ""
-    echo "=== Starting NFS/RPC services ==="
-    systemctl unmask rpcbind.socket rpcbind rpc-statd nfs-client.target nfs-common 2>/dev/null || true
-    systemctl start rpcbind.socket 2>/dev/null || true
-    systemctl start rpcbind 2>/dev/null || true
-    systemctl start rpc-statd 2>/dev/null || true
-    systemctl start nfs-client.target 2>/dev/null || true
-    systemctl start nfs-common 2>/dev/null || true
-    
-    # Verify rpc.statd is running
-    if pgrep -x "rpc.statd" > /dev/null 2>&1; then
-        echo "rpc.statd is running (NFS locking enabled)"
+        # Start required NFS userspace services (rpc.statd for locking)
+        echo ""
+        echo "=== Starting NFS/RPC services ==="
+        systemctl unmask rpcbind.socket rpcbind rpc-statd nfs-client.target nfs-common 2>/dev/null || true
+        systemctl start rpcbind.socket 2>/dev/null || true
+        systemctl start rpcbind 2>/dev/null || true
+        systemctl start rpc-statd 2>/dev/null || true
+        systemctl start nfs-client.target 2>/dev/null || true
+        systemctl start nfs-common 2>/dev/null || true
+        
+        # Verify rpc.statd is running
+        if pgrep -x "rpc.statd" > /dev/null 2>&1; then
+            echo "rpc.statd is running (NFS locking enabled)"
+        else
+            echo "WARNING: Starting rpc.statd directly..."
+            /usr/sbin/rpc.statd 2>/dev/null || true
+        fi
+        
+        exit 0
     else
-        echo "WARNING: Starting rpc.statd directly..."
-        /usr/sbin/rpc.statd 2>/dev/null || true
+        echo ""
+        echo "WARNING: vastnfs-ctl reload completed but VAST NFS is not loaded."
+        echo "Falling back to manual unload/load method..."
     fi
-    
-    exit 0
+else
+    echo ""
+    echo "WARNING: vastnfs-ctl reload failed or is unavailable!"
+    echo "Falling back to manual unload/load method..."
 fi
 
 echo ""
 echo "=========================================="
-echo "WARNING: vastnfs-ctl reload failed!"
-echo "Falling back to manual unload/load method..."
+echo "Manual unload/load fallback"
 echo "=========================================="
 echo ""
 
@@ -852,6 +880,22 @@ try_unload_modules() {
     rmmod sunrpc nfsv4 auth_rpcgss lockd nfsv3 rpcsec_gss_krb5 nfs_acl nfs 2>/dev/null || true
 }
 
+load_host_prerequisite_modules() {
+    echo ""
+    echo "=== Loading host prerequisite modules ==="
+    # Some kernels keep lock/grace helpers outside the VAST NFS bundle. Load
+    # them from the host tree before VAST lockd/nfs resolves its symbols.
+    for mod in filelock grace; do
+        if cat /proc/modules | grep -q "^$mod "; then
+            echo "Host prerequisite already loaded: $mod"
+        elif modprobe -v "$mod" 2>&1; then
+            echo "Loaded host prerequisite: $mod"
+        else
+            echo "Host prerequisite not available or built in: $mod"
+        fi
+    done
+}
+
 # Function to load VAST NFS modules
 load_vastnfs_modules() {
     echo ""
@@ -893,6 +937,8 @@ load_vastnfs_modules() {
             return 1
         fi
     fi
+
+    load_host_prerequisite_modules
     
     modprobe -d "$MODULE_ROOT" -v nfs && echo "Loaded: nfs" || { echo "FAILED: nfs"; dmesg | tail -10; return 1; }
     modprobe -d "$MODULE_ROOT" -v nfsv3 2>/dev/null && echo "Loaded: nfsv3" || true
@@ -978,7 +1024,7 @@ check_sunrpc_unloaded() {
 
 # Function to check if VAST NFS is loaded
 check_vastnfs_loaded() {
-    if cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null | grep -q vastdata; then
+    if is_vastnfs_stack_loaded; then
         return 0  # Success - VAST NFS is loaded
     fi
     return 1  # Failed - VAST NFS is not loaded
@@ -1312,15 +1358,15 @@ VASTNFS_VERSION_LOADED=$(kubectl run "$VERIFY_POD" -n "$NAMESPACE" --rm -i --res
             "containers": [{
                 "name": "verify",
                 "image": "'"$HELPER_IMAGE"'",
-                "command": ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "cat", "/sys/module/sunrpc/parameters/nfs_bundle_version"],
+                "command": ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "sh", "-c", "VERSION=$(cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null || true); if echo \"$VERSION\" | grep -q vastdata && grep -q \"^nfs \" /proc/modules; then echo \"VASTNFS_LOADED:$VERSION\"; else echo \"VASTNFS_NOT_LOADED:${VERSION:-NO_VERSION}\"; cat /proc/modules | grep -E \"^(sunrpc|nfs|lockd|grace) \" || true; fi"],
                 "securityContext": {"privileged": true}
             }],
             "tolerations": [{"operator": "Exists"}]
         }
     }' 2>/dev/null | grep -v "command prompt" | grep -v "^pod " | head -1 || echo "UNKNOWN")
 
-if echo "$VASTNFS_VERSION_LOADED" | grep -q vastdata; then
-    print_success "VAST NFS is loaded: $VASTNFS_VERSION_LOADED"
+if echo "$VASTNFS_VERSION_LOADED" | grep -q "^VASTNFS_LOADED:"; then
+    print_success "VAST NFS is loaded: ${VASTNFS_VERSION_LOADED#VASTNFS_LOADED:}"
 else
     print_error "VAST NFS does not appear to be loaded!"
     print_error "Version reported: $VASTNFS_VERSION_LOADED"
@@ -1352,7 +1398,7 @@ kubectl run "$POD_NAME" -n "$NAMESPACE" --rm -i --restart=Never \
                 "name": "verify",
                 "image": "'"$HELPER_IMAGE"'",
                 "command": ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--", "sh", "-c", 
-                    "echo \"=== Host OS ===\"; cat /etc/os-release 2>/dev/null | head -2 || echo Unknown; echo; echo \"=== VAST NFS Version ===\"; cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null || echo NOT_LOADED; echo; echo \"=== vastnfs-ctl status ===\"; /usr/local/bin/vastnfs-ctl status 2>/dev/null || echo vastnfs-ctl not available; echo; echo \"=== Loaded NFS modules ===\"; cat /proc/modules | grep sunrpc || echo None"
+                    "echo \"=== Host OS ===\"; cat /etc/os-release 2>/dev/null | head -2 || echo Unknown; echo; echo \"=== VAST NFS Version ===\"; cat /sys/module/sunrpc/parameters/nfs_bundle_version 2>/dev/null || echo NOT_LOADED; echo; echo \"=== vastnfs-ctl status ===\"; /usr/local/bin/vastnfs-ctl status 2>/dev/null || echo vastnfs-ctl not available; echo; echo \"=== Loaded NFS modules ===\"; cat /proc/modules | grep -E \"^(sunrpc|nfs|lockd|grace) \" || echo None"
                 ],
                 "securityContext": {"privileged": true}
             }],
