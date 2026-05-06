@@ -5,14 +5,15 @@ kind: Kustomization
 # This removes inTreeModulesToRemove to prevent conflicts with already-loaded VAST NFS modules
 
 resources:
-  - ../base
+- ../base
 
-patches:
   # Remove inTreeModulesToRemove for reinstall scenarios
   # When VAST NFS is already loaded, we don't need to unload in-tree modules
-  - target:
-      kind: Module
-      name: vastnfs
-    patch: |-
-      - op: remove
-        path: /spec/moduleLoader/container/inTreeModulesToRemove
+patches:
+- patch: |-
+    - op: remove
+      path: /spec/moduleLoader/container/inTreeModulesToRemove
+  target:
+    kind: Module
+    name: vastnfs
+namespace: vastnfs-kmm

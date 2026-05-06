@@ -105,6 +105,38 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 echo ""
+echo "=== Restoring default in-tree NFS client ==="
+if [ -e /sys/module/sunrpc/parameters/nfs_bundle_version ] || \
+   [ -e /sys/module/sunrpc/parameters/nfs_bundle_git_version ]; then
+    echo "VAST NFS is still loaded; skipping default NFS client restore."
+    echo "Run make graceful-unload first, then retry cleanup-node-driver."
+else
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now disable-intree-nfs.service 2>/dev/null || true
+        rm -f /etc/systemd/system/disable-intree-nfs.service
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl unmask rpcbind.socket rpcbind rpc-statd nfs-client.target nfs-common 2>/dev/null || true
+    fi
+
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe sunrpc 2>/dev/null || true
+        modprobe nfs 2>/dev/null || true
+        modprobe nfsv3 2>/dev/null || true
+        modprobe nfsv4 2>/dev/null || true
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl start rpcbind.socket 2>/dev/null || true
+        systemctl start rpcbind 2>/dev/null || true
+        systemctl start rpc-statd 2>/dev/null || true
+        systemctl start nfs-client.target 2>/dev/null || true
+        systemctl start nfs-common 2>/dev/null || true
+    fi
+
+    echo "Default NFS client restore attempted"
+fi
+
+echo ""
 echo "Node cleanup complete"
 NODE_CLEANUP
 }
