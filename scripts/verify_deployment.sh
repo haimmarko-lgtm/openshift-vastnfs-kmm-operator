@@ -157,14 +157,14 @@ get_kmm_status() {
     local role="$2"
     local selector
 
-    selector=$(get_module_label_selector)
-    if [[ -z "$selector" ]]; then
-        echo "Managed"
+    if [[ "$role" == "control-plane" ]] && is_control_plane_only "$node"; then
+        echo "N/A"
         return
     fi
 
-    if [[ "$role" == "control-plane" ]] && is_control_plane_only "$node"; then
-        echo "N/A"
+    selector=$(get_module_label_selector)
+    if [[ -z "$selector" ]]; then
+        echo "Managed"
         return
     fi
 
